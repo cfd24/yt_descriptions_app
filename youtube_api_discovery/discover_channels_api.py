@@ -291,7 +291,8 @@ def discover_channels(output_file, max_new=1000, queries=None, include_recent_da
                     data['avg_views_last_month']
                 ])
             try:
-                sheet_obj.append_rows(new_rows)
+                # table_range="A1" ensures it anchors the append to column A, preventing horizontal shifting!
+                sheet_obj.append_rows(new_rows, table_range="A1")
                 print(f"Appended {len(new_rows)} new channels to Google Sheet: {google_sheet}")
             except Exception as e:
                 print(f"Error appending row to Google Sheets: {e}")
