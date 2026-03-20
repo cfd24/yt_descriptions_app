@@ -5,6 +5,34 @@ import os
 import tempfile
 import pandas as pd
 import datetime
+import hmac
+
+# Install playwright automatically (mainly for Cloud deployment)
+os.system("playwright install chromium > /dev/null 2>&1")
+
+def check_password():
+    """Returns `True` if the user had the correct password."""
+    if "app_password" not in st.secrets:
+        return True
+        
+    def password_entered():
+        if hmac.compare_digest(st.session_state["password"], st.secrets["app_password"]):
+            st.session_state["password_correct"] = True
+            del st.session_state["password"]
+        else:
+            st.session_state["password_correct"] = False
+
+    if st.session_state.get("password_correct", False):
+        return True
+
+    st.title("🔒 Restricted Access")
+    st.text_input("Please enter the password to access this tool:", type="password", on_change=password_entered, key="password")
+    if "password_correct" in st.session_state:
+        st.error("😕 Password incorrect")
+    return False
+
+if not check_password():
+    st.stop()
 
 # Path to the scripts
 DISCOVER_SCRIPT = os.path.join(os.path.dirname(__file__), 'youtube_api_discovery', 'discover_channels_api.py')
@@ -53,9 +81,13 @@ with tab1:
         extra_cost += max_new_channels * 300
     total_cost = base_cost + channel_cost + extra_cost
     
+    # Calculate dynamic quota limit based on number of keys provided
+    valid_keys = [k.strip() for k in api_keys_str.split(',') if k.strip()]
+    total_quota = 10000 * max(1, len(valid_keys))
+    
     st.metric(label="Estimated API Cost (Units)", value=f"{total_cost:,}", 
-              delta=f"Free Tier Left: {10000 - total_cost:,} (approx)" if total_cost <= 10000 else "Exceeds 10k/day limit!", 
-              delta_color="normal" if total_cost <= 10000 else "inverse")
+              delta=f"Combined Quota Left: {total_quota - total_cost:,} (approx)" if total_cost <= total_quota else f"Exceeds {total_quota:,}/day limit!", 
+              delta_color="normal" if total_cost <= total_quota else "inverse")
     
     if st.button("Discover Channels"):
         with st.spinner("Discovering..."):
