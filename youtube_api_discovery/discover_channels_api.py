@@ -17,9 +17,22 @@ from oauth2client.service_account import ServiceAccountCredentials
 
 # Default Queries for discovery
 QUERIES = [
+    # Tier 1 (Core Focus)
     "hearthstone", "magic the gathering", "pokemon card game",
     "slay the spire", "balatro", "hades game", "binding of isaac",
-    "steam next fest", "indie games", "demo games", "new games"
+    "roblox demo", "roblox showcase", 
+    # Tier 2 (Card Games & Strategy)
+    "marvel snap", "yu-gi-oh master duel", "gwent", "legends of runeterra",
+    "inscryption", "monster train", "deckbuilder game", "tcg box break",
+    # Tier 3 (Indie & Roguelike)
+    "steam next fest", "indie games", "demo games", "new games",
+    "roguelike gameplay", "roguelite review", "metroidvania",
+    "indie game devlog", "itch.io games", "underrated indie games",
+    # Tier 4 (Broader Gaming / Variety)
+    "upcoming cozy games", "gacha pulls", "rpg maker horror", 
+    "pixel art platformer", "early access gameplay", "kickstarter game trailer",
+    "speedrun indie", "gaming hidden gems", "mobile rts", "turn based tactics",
+    "multiplayer beta footage", "new survivor.io clone"
 ]
 
 def extract_emails(text):
