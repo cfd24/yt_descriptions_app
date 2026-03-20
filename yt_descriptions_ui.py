@@ -13,8 +13,11 @@ EXTRACT_SCRIPT = os.path.join(os.path.dirname(__file__), 'channels_to_descriptio
 st.title("📺 YouTube Channel Discovery Tools")
 st.markdown("Discover new channels and easily extract their about-page descriptions and contact emails.")
 
-# Default API key (from previous code)
-DEFAULT_API_KEY = "AIzaSyDKxMNig7b0V6Ji79W8CZ_ugfM6uDYV89Y"
+# Default API key from Streamlit secrets (so it doesn't leak to GitHub)
+try:
+    DEFAULT_API_KEY = st.secrets.get("api_keys", "")
+except FileNotFoundError:
+    DEFAULT_API_KEY = ""
 
 with st.expander("⚙️ API Settings & Authentication"):
     st.markdown("Enter one or more YouTube Data v3 API keys separated by commas. The script will automatically rotate them if one hits quota.")
