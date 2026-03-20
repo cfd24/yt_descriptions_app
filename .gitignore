@@ -17,3 +17,6 @@ outputs/
 
 # OS files
 .DS_Store
+
+# Google Credentials
+google_credentials.json

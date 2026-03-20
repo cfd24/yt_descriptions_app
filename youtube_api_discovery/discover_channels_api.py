@@ -3,7 +3,7 @@ discover_channels_api.py
 
 Discover YouTube channels related to card games, roguelike games, Steam Next Fest, and indie/demo games.
 Fetch channel descriptions and extract emails using YouTube Data API v3.
-Output CSV with channel info and emails.
+Output CSV with channel info and emails, or append directly to a Google Sheet.
 """
 
 import csv
@@ -12,6 +12,8 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 import re
 from datetime import datetime, timedelta
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
 
 # Default Queries for discovery
 QUERIES = [
@@ -50,15 +52,53 @@ class YouTubeAPIClient:
         self.client = build('youtube', 'v3', developerKey=self.api_keys[self.current_idx])
         return self.client
 
-def discover_channels(output_file, max_new=1000, queries=None, include_recent_date=False, include_avg_views=False, existing_csv=None, api_keys=None):
+def get_gspread_client(creds_file="google_credentials.json"):
+    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+    creds = ServiceAccountCredentials.from_json_keyfile_name(creds_file, scope)
+    client = gspread.authorize(creds)
+    return client
+
+def discover_channels(output_file, max_new=1000, queries=None, include_recent_date=False, include_avg_views=False, existing_csv=None, api_keys=None, google_sheet=None):
     if queries is None:
         queries = QUERIES
         
     yt_manager = YouTubeAPIClient(api_keys)
     youtube = yt_manager.get()
     
-    # Load existing channel IDs to skip duplicates
     channels = {}
+    new_channel_ids = set()
+    sheet_obj = None
+    
+    fieldnames = [
+        'channel_id', 'channel_name', 'channel_url', 'custom_url', 'subscribers', 
+        'view_count', 'video_count', 'country', 'default_language', 'published_at',
+        'channel_description', 'emails', 'links', 'queries', 
+        'recent_video_date', 'avg_views_last_month'
+    ]
+
+    # Google Sheets Initialization
+    if google_sheet:
+        try:
+            gc = get_gspread_client()
+            sheet_obj = gc.open(google_sheet).sheet1
+            data = sheet_obj.get_all_values()
+            if not data:
+                sheet_obj.append_row(fieldnames)
+            else:
+                for idx, row in enumerate(data[1:], start=2): # 1-based indexing in sheets, row 1 is header
+                    if len(row) > 0 and row[0].strip():
+                        existing_qs = row[13].split(';') if len(row) > 13 else []
+                        channels[row[0]] = {
+                            'is_remote': True,
+                            'row_idx': idx,
+                            'queries': [q.strip() for q in existing_qs if q.strip()],
+                            'updated_queries': False
+                        }
+        except Exception as e:
+            print(f"Error connecting to Google Sheets: {e}")
+            return
+
+    # Load existing CSV (fallback or addition)
     if existing_csv and os.path.exists(existing_csv):
         try:
             with open(existing_csv, 'r', encoding='utf-8') as f:
@@ -85,10 +125,10 @@ def discover_channels(output_file, max_new=1000, queries=None, include_recent_da
         except Exception as e:
             print(f"Error loading existing CSV: {e}")
     
-    max_total = len(channels) + max_new  # Allow unlimited existing, add up to max_new new
+    max_total = len(channels) + max_new
     total_channels = len(channels)
     
-    # Collect new channels (skip if already in channels)
+    # Collect new channels
     for query in queries:
         if total_channels >= max_total:
             break
@@ -125,24 +165,31 @@ def discover_channels(output_file, max_new=1000, queries=None, include_recent_da
                             'view_count': '',
                             'video_count': ''
                         }
+                        new_channel_ids.add(channel_id)
                         total_channels += 1
                         if total_channels >= max_total:
                             break
                     else:
-                        # Add overlapping query tagging
-                        if query not in channels[channel_id].get('queries', []):
-                            channels[channel_id].setdefault('queries', []).append(query)
+                        # Add overlapping query tagging (both for remote & newly discovered records)
+                        c_data = channels[channel_id]
+                        if c_data.get('is_remote'):
+                            if query not in c_data['queries']:
+                                c_data['queries'].append(query)
+                                c_data['updated_queries'] = True
+                        else:
+                            if query not in c_data.get('queries', []):
+                                c_data.setdefault('queries', []).append(query)
                 
                 page_token = search_response.get('nextPageToken')
                 if not page_token or total_channels >= max_total:
                     break
             except HttpError as e:
-                if e.resp.status in [403, 429]:  # Quota exceeded or too many requests
+                if e.resp.status in [403, 429]:
                     print(f"Quota exceeded backing off or swapping keys...")
                     try:
                         youtube = yt_manager.next()
                         print("Swapped to next API key.")
-                        continue  # Retry with new key
+                        continue
                     except Exception:
                         print("All keys exhausted.")
                         break
@@ -150,9 +197,10 @@ def discover_channels(output_file, max_new=1000, queries=None, include_recent_da
                     print(f"Error searching for {query}: {e}")
                 break
     
-    # Fetch descriptions and stats for new channels only (existing already have data)
-    for channel_id, data in list(channels.items())[:max_total]:
-        if not data['channel_description']:  # Only fetch if not already loaded
+    # Fetch descriptions and stats for new channels only
+    for channel_id in list(new_channel_ids):
+        data = channels[channel_id]
+        if not data.get('channel_description'):
             try:
                 channel_request = youtube.channels().list(
                     part='snippet,statistics',
@@ -162,7 +210,6 @@ def discover_channels(output_file, max_new=1000, queries=None, include_recent_da
                 if 'items' in channel_response and channel_response['items']:
                     item = channel_response['items'][0]
                     
-                    # Extract everything from snippet/statistics
                     snippet = item.get('snippet', {})
                     stats = item.get('statistics', {})
                     
@@ -218,35 +265,80 @@ def discover_channels(output_file, max_new=1000, queries=None, include_recent_da
                 print(f"Error fetching channel {channel_id}: {e}")
                 continue
     
-    # Write to CSV
-    with open(output_file, 'w', newline='', encoding='utf-8') as csvfile:
-        fieldnames = [
-            'channel_id', 'channel_name', 'channel_url', 'custom_url', 'subscribers', 
-            'view_count', 'video_count', 'country', 'default_language', 'published_at',
-            'channel_description', 'emails', 'links', 'queries', 
-            'recent_video_date', 'avg_views_last_month'
-        ]
-        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-        writer.writeheader()
-        for channel_id, data in channels.items():
-            writer.writerow({
-                'channel_id': channel_id,
-                'channel_name': data['channel_name'],
-                'channel_url': data['channel_url'],
-                'custom_url': data.get('custom_url', ''),
-                'subscribers': data['subscribers'],
-                'view_count': data.get('view_count', ''),
-                'video_count': data.get('video_count', ''),
-                'country': data.get('country', ''),
-                'default_language': data.get('default_language', ''),
-                'published_at': data.get('published_at', ''),
-                'channel_description': data['channel_description'],
-                'emails': ';'.join(data['emails']),
-                'links': ';'.join(data['links']),
-                'queries': ';'.join(data.get('queries', [])),
-                'recent_video_date': data['recent_video_date'],
-                'avg_views_last_month': data['avg_views_last_month']
-            })
+    # Write to Google Sheet contextually
+    if google_sheet and sheet_obj:
+        if new_channel_ids:
+            new_rows = []
+            for channel_id in new_channel_ids:
+                data = channels.get(channel_id)
+                if not data: continue
+                new_rows.append([
+                    channel_id,
+                    data['channel_name'],
+                    data['channel_url'],
+                    data.get('custom_url', ''),
+                    data['subscribers'],
+                    data.get('view_count', ''),
+                    data.get('video_count', ''),
+                    data.get('country', ''),
+                    data.get('default_language', ''),
+                    data.get('published_at', ''),
+                    data['channel_description'],
+                    ';'.join(data['emails']),
+                    ';'.join(data['links']),
+                    ';'.join(data.get('queries', [])),
+                    data['recent_video_date'],
+                    data['avg_views_last_month']
+                ])
+            try:
+                sheet_obj.append_rows(new_rows)
+                print(f"Appended {len(new_rows)} new channels to Google Sheet: {google_sheet}")
+            except Exception as e:
+                print(f"Error appending row to Google Sheets: {e}")
+        else:
+            print("No new channels found to append.")
+            
+        # Update existing channels' queries if there were overlaps
+        updates = []
+        for channel_id, c_data in channels.items():
+            if c_data.get('is_remote') and c_data.get('updated_queries'):
+                cell_ref = f"N{c_data['row_idx']}"
+                updates.append({
+                    'range': cell_ref,
+                    'values': [[';'.join(c_data['queries'])]]
+                })
+        
+        if updates:
+            try:
+                sheet_obj.batch_update(updates)
+                print(f"Updated query tags for {len(updates)} existing channels in the Google Sheet.")
+            except Exception as e:
+                print(f"Error batch updating queries: {e}")
+    else:
+        # Write to local CSV
+        with open(output_file, 'w', newline='', encoding='utf-8') as csvfile:
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+            writer.writeheader()
+            for channel_id, data in channels.items():
+                if not data: continue # Skip stubs loaded from sheets
+                writer.writerow({
+                    'channel_id': channel_id,
+                    'channel_name': data['channel_name'],
+                    'channel_url': data['channel_url'],
+                    'custom_url': data.get('custom_url', ''),
+                    'subscribers': data['subscribers'],
+                    'view_count': data.get('view_count', ''),
+                    'video_count': data.get('video_count', ''),
+                    'country': data.get('country', ''),
+                    'default_language': data.get('default_language', ''),
+                    'published_at': data.get('published_at', ''),
+                    'channel_description': data['channel_description'],
+                    'emails': ';'.join(data['emails']),
+                    'links': ';'.join(data['links']),
+                    'queries': ';'.join(data.get('queries', [])),
+                    'recent_video_date': data['recent_video_date'],
+                    'avg_views_last_month': data['avg_views_last_month']
+                })
 
 if __name__ == '__main__':
     import argparse
@@ -258,8 +350,9 @@ if __name__ == '__main__':
     parser.add_argument('--include-avg-views', action='store_true', help='Include average views last month')
     parser.add_argument('--existing-csv', help='Path to existing CSV with channel_id column')
     parser.add_argument('--api-keys', help='Comma-separated YouTube API keys', required=True)
+    parser.add_argument('--google-sheet', help='Name of the Google Sheet (e.g. YT_Scraper_DB) to append to instead of saving CSV')
     args = parser.parse_args()
     
     queries = [args.query] if args.query else QUERIES
     keys = [k.strip() for k in args.api_keys.split(',')]
-    discover_channels(args.output, args.max_channels, queries, args.include_recent_date, args.include_avg_views, args.existing_csv, keys)
+    discover_channels(args.output, args.max_channels, queries, args.include_recent_date, args.include_avg_views, args.existing_csv, keys, args.google_sheet)

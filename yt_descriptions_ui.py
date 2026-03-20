@@ -66,8 +66,13 @@ with tab1:
         include_recent_date = st.checkbox("Include recent video date", help="Costs ~100 units/channel")
         include_avg_views = st.checkbox("Include avg views last month", help="Costs ~200-500 units/channel")
         
-    default_filename = f"outputs/yt_discover_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-    output_path = st.text_input("Output CSV Path", value=default_filename)
+    col_out1, col_out2 = st.columns(2)
+    with col_out1:
+        default_filename = f"outputs/yt_discover_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+        output_path = st.text_input("Output CSV Path", value=default_filename)
+        
+    with col_out2:
+        google_sheet = st.text_input("Append to Google Sheet (Title)", value="YT_Scraper_DB", help="Leave blank to save to local CSV only.")
     
     # Estimate costs
     num_queries = 11 if not query else 1  # Default queries count
@@ -98,6 +103,10 @@ with tab1:
                 cmd.append('--include-recent-date')
             if include_avg_views:
                 cmd.append('--include-avg-views')
+            
+            if google_sheet.strip():
+                cmd.extend(['--google-sheet', google_sheet.strip()])
+                
             if existing_csv:
                 # Save uploaded file to temp
                 with tempfile.NamedTemporaryFile(delete=False, suffix='.csv') as tmp_existing:
@@ -107,21 +116,27 @@ with tab1:
             result = subprocess.run(cmd, capture_output=True, text=True, cwd=os.path.dirname(__file__))
             
             if result.returncode == 0:
-                st.success("Discovery completed!")
-                st.text("Output: " + output_path)
-                try:
-                    df = pd.read_csv(output_path)
-                    st.dataframe(df.head())
-                    
-                    with open(output_path, 'rb') as f:
-                        st.download_button(
-                            label="Download CSV",
-                            data=f,
-                            file_name=os.path.basename(output_path),
-                            mime="text/csv"
-                        )
-                except Exception:
-                    st.error("Failed to load output CSV")
+                if google_sheet.strip():
+                    st.success(f"Discovery completed! Appended new channels to Google Sheet: {google_sheet}")
+                    # Parse the standard output to show log
+                    if result.stdout:
+                        st.text_area("Log Output", result.stdout, height=150)
+                else:
+                    st.success("Discovery completed!")
+                    st.text("Output: " + output_path)
+                    try:
+                        df = pd.read_csv(output_path)
+                        st.dataframe(df.head())
+                        
+                        with open(output_path, 'rb') as f:
+                            st.download_button(
+                                label="Download CSV",
+                                data=f,
+                                file_name=os.path.basename(output_path),
+                                mime="text/csv"
+                            )
+                    except Exception:
+                        st.error("Failed to load output CSV")
             else:
                 st.error("Error during discovery:")
                 st.text_area("Error Output", result.stderr, height=300)
