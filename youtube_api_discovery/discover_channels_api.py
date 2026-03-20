@@ -15,25 +15,37 @@ from datetime import datetime, timedelta
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 
+import random
+
+def generate_queries():
+    """Procedurally generate an infinite matrix of unique gaming queries."""
+    topics = [
+        "hearthstone", "magic the gathering", "pokemon tcg", "yu-gi-oh", 
+        "slay the spire", "balatro", "hades", "binding of isaac", "roblox", 
+        "marvel snap", "gwent", "legends of runeterra", "inscryption", 
+        "monster train", "deckbuilder", "indie game", "roguelike", 
+        "roguelite", "metroidvania", "gacha", "rpg maker", 
+        "cozy game", "pixel art", "survivor.io", "strategy card"
+    ]
+    modifiers = [
+        "gameplay", "demo", "review", "showcase", "devlog", "trailer", 
+        "speedrun", "hidden gem", "walkthrough", "let's play", "tips", 
+        "guide", "box break", "packs", "pulls", "beta", "early access",
+        "first impressions", "update", "new content"
+    ]
+    
+    # Generate cross-product (e.g. "roblox devlog", "hades speedrun") = 500+ combos
+    all_combos = [f"{t} {m}" for t in topics for m in modifiers]
+    all_combos.extend(topics) # Add base topics
+    all_combos.append("steam next fest")
+    
+    # Shuffle so every time the github action starts up, it searches a totally unique path!
+    random.shuffle(all_combos)
+    
+    return all_combos
+
 # Default Queries for discovery
-QUERIES = [
-    # Tier 1 (Core Focus)
-    "hearthstone", "magic the gathering", "pokemon card game",
-    "slay the spire", "balatro", "hades game", "binding of isaac",
-    "roblox demo", "roblox showcase", 
-    # Tier 2 (Card Games & Strategy)
-    "marvel snap", "yu-gi-oh master duel", "gwent", "legends of runeterra",
-    "inscryption", "monster train", "deckbuilder game", "tcg box break",
-    # Tier 3 (Indie & Roguelike)
-    "steam next fest", "indie games", "demo games", "new games",
-    "roguelike gameplay", "roguelite review", "metroidvania",
-    "indie game devlog", "itch.io games", "underrated indie games",
-    # Tier 4 (Broader Gaming / Variety)
-    "upcoming cozy games", "gacha pulls", "rpg maker horror", 
-    "pixel art platformer", "early access gameplay", "kickstarter game trailer",
-    "speedrun indie", "gaming hidden gems", "mobile rts", "turn based tactics",
-    "multiplayer beta footage", "new survivor.io clone"
-]
+QUERIES = generate_queries()
 
 def extract_emails(text):
     """Extract email addresses from text."""
