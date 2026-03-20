@@ -4,26 +4,39 @@ import sys
 import os
 import tempfile
 import pandas as pd
+import datetime
 
 # Path to the scripts
 DISCOVER_SCRIPT = os.path.join(os.path.dirname(__file__), 'youtube_api_discovery', 'discover_channels_api.py')
 EXTRACT_SCRIPT = os.path.join(os.path.dirname(__file__), 'channels_to_description.py')
 
-st.title("YouTube Tools")
+st.title("📺 YouTube Channel Discovery Tools")
+st.markdown("Discover new channels and easily extract their about-page descriptions and contact emails.")
 
-st.markdown("Discover channels and extract descriptions.")
+# Default API key (from previous code)
+DEFAULT_API_KEY = "AIzaSyDKxMNig7b0V6Ji79W8CZ_ugfM6uDYV89Y"
 
-tab1, tab2 = st.tabs(["Discover Channels", "Extract Descriptions"])
+with st.expander("⚙️ API Settings & Authentication"):
+    st.markdown("Enter one or more YouTube Data v3 API keys separated by commas. The script will automatically rotate them if one hits quota.")
+    api_keys_str = st.text_input("API Keys", value=DEFAULT_API_KEY, type="password")
+
+tab1, tab2 = st.tabs(["🔍 Discover Channels", "📝 Extract Descriptions"])
 
 with tab1:
-    st.header("Discover YouTube Channels")
+    st.header("🔍 Discover New YouTube Channels")
     
-    query = st.text_input("Search Query", value="", help="Leave blank to use default game-related queries")
-    max_new_channels = st.slider("Max New Channels", min_value=1, max_value=10000, value=100)
-    include_recent_date = st.checkbox("Include recent video date (~100 units/channel)", value=False)
-    include_avg_views = st.checkbox("Include avg views last month (~200-500 units/channel)", value=False)
-    existing_csv = st.file_uploader("Existing Channels CSV (optional, to skip duplicates)", type=['csv'])
-    output_path = st.text_input("Output CSV Path", value="outputs/yt_discover.csv")
+    col1, col2 = st.columns([2, 1])
+    with col1:
+        query = st.text_input("Search Query", value="", help="Leave blank to use default game-related queries")
+        existing_csv = st.file_uploader("Existing Channels CSV (optional, to skip duplicates)", type=['csv'])
+        
+    with col2:
+        max_new_channels = st.number_input("Max New Channels", min_value=1, max_value=10000, value=100, step=50)
+        include_recent_date = st.checkbox("Include recent video date", help="Costs ~100 units/channel")
+        include_avg_views = st.checkbox("Include avg views last month", help="Costs ~200-500 units/channel")
+        
+    default_filename = f"outputs/yt_discover_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+    output_path = st.text_input("Output CSV Path", value=default_filename)
     
     # Estimate costs
     num_queries = 11 if not query else 1  # Default queries count
@@ -32,16 +45,18 @@ with tab1:
     channel_cost = max_new_channels * 1  # Channels list
     extra_cost = 0
     if include_recent_date:
-        extra_cost += max_new_channels * 100  # 1 search request per channel
+        extra_cost += max_new_channels * 100
     if include_avg_views:
-        extra_cost += max_new_channels * 300  # Estimate for multiple requests
+        extra_cost += max_new_channels * 300
     total_cost = base_cost + channel_cost + extra_cost
     
-    st.write(f"Estimated API cost: {total_cost} units (Free tier: 10,000/day)")
+    st.metric(label="Estimated API Cost (Units)", value=f"{total_cost:,}", 
+              delta=f"Free Tier Left: {10000 - total_cost:,} (approx)" if total_cost <= 10000 else "Exceeds 10k/day limit!", 
+              delta_color="normal" if total_cost <= 10000 else "inverse")
     
     if st.button("Discover Channels"):
         with st.spinner("Discovering..."):
-            cmd = [sys.executable, DISCOVER_SCRIPT, '--max-channels', str(max_new_channels), '--output', output_path]
+            cmd = [sys.executable, DISCOVER_SCRIPT, '--max-channels', str(max_new_channels), '--output', output_path, '--api-keys', api_keys_str]
             if query:
                 cmd.extend(['--query', query])
             if include_recent_date:
@@ -62,6 +77,14 @@ with tab1:
                 try:
                     df = pd.read_csv(output_path)
                     st.dataframe(df.head())
+                    
+                    with open(output_path, 'rb') as f:
+                        st.download_button(
+                            label="Download CSV",
+                            data=f,
+                            file_name=os.path.basename(output_path),
+                            mime="text/csv"
+                        )
                 except Exception:
                     st.error("Failed to load output CSV")
             else:
@@ -91,7 +114,8 @@ with tab2:
                     input_path = tmp_in.name
                 
                 # Output path
-                output_path = os.path.join('outputs', 'channels_with_descriptions.csv')
+                default_out_2 = f"channels_with_descriptions_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+                output_path = os.path.join('outputs', default_out_2)
                 
                 # Run the script
                 cmd = [sys.executable, EXTRACT_SCRIPT, '--input', input_path, '--output', output_path]
