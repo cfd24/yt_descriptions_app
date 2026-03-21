@@ -98,7 +98,7 @@ def discover_channels(output_file, max_new=1000, queries=None, include_recent_da
         'channel_id', 'channel_name', 'channel_url', 'custom_url', 'subscribers', 
         'view_count', 'video_count', 'country', 'default_language', 'published_at',
         'channel_description', 'emails', 'links', 'queries', 
-        'recent_video_date', 'avg_views_last_month'
+        'recent_video_date', 'avg_views_last_month', 'discovered_at'
     ]
 
     # Google Sheets Initialization
@@ -153,9 +153,12 @@ def discover_channels(output_file, max_new=1000, queries=None, include_recent_da
     max_total = len(channels) + max_new
     total_channels = len(channels)
     
+    # API Exhaustion tracker
+    api_exhausted = False
+    
     # Collect new channels
     for query in queries:
-        if total_channels >= max_total:
+        if total_channels >= max_total or api_exhausted:
             break
         page_token = None
         while total_channels < max_total:
@@ -188,7 +191,8 @@ def discover_channels(output_file, max_new=1000, queries=None, include_recent_da
                             'default_language': '',
                             'published_at': '',
                             'view_count': '',
-                            'video_count': ''
+                            'video_count': '',
+                            'discovered_at': datetime.utcnow().isoformat() + 'Z'
                         }
                         new_channel_ids.add(channel_id)
                         total_channels += 1
@@ -217,23 +221,33 @@ def discover_channels(output_file, max_new=1000, queries=None, include_recent_da
                         continue
                     except Exception:
                         print("All keys exhausted.")
+                        api_exhausted = True
                         break
                 else:
                     print(f"Error searching for {query}: {e}")
                 break
     
-    # Fetch descriptions and stats for new channels only
-    for channel_id in list(new_channel_ids):
-        data = channels[channel_id]
-        if not data.get('channel_description'):
-            try:
-                channel_request = youtube.channels().list(
-                    part='snippet,statistics',
-                    id=channel_id
-                )
-                channel_response = channel_request.execute()
-                if 'items' in channel_response and channel_response['items']:
-                    item = channel_response['items'][0]
+    # Fetch descriptions and stats for new channels only (BATCHED FOR EFFICIENCY)
+    successful_channel_ids = set()
+    new_channel_list = list(new_channel_ids)
+    
+    # Process in batches of 50
+    for i in range(0, len(new_channel_list), 50):
+        if api_exhausted:
+            break
+            
+        chunk = new_channel_list[i:i+50]
+        try:
+            channel_request = youtube.channels().list(
+                part='snippet,statistics',
+                id=','.join(chunk)
+            )
+            channel_response = channel_request.execute()
+            
+            if 'items' in channel_response:
+                for item in channel_response['items']:
+                    channel_id = item['id']
+                    data = channels[channel_id]
                     
                     snippet = item.get('snippet', {})
                     stats = item.get('statistics', {})
@@ -250,45 +264,42 @@ def discover_channels(output_file, max_new=1000, queries=None, include_recent_da
                     data['default_language'] = snippet.get('defaultLanguage', '')
                     data['published_at'] = snippet.get('publishedAt', '')
                     
+                    # Optional heavy loops per channel
                     if include_recent_date:
-                        recent_request = youtube.search().list(
-                            channelId=channel_id,
-                            type='video',
-                            part='snippet',
-                            order='date',
-                            maxResults=1
-                        )
-                        recent_response = recent_request.execute()
-                        if recent_response['items']:
-                            data['recent_video_date'] = recent_response['items'][0]['snippet']['publishedAt']
+                        try:
+                            recent_request = youtube.search().list(channelId=channel_id, type='video', part='snippet', order='date', maxResults=1)
+                            recent_response = recent_request.execute()
+                            if recent_response['items']:
+                                data['recent_video_date'] = recent_response['items'][0]['snippet']['publishedAt']
+                        except: pass
                     
                     if include_avg_views:
-                        one_month_ago = (datetime.utcnow() - timedelta(days=30)).isoformat() + 'Z'
-                        views_request = youtube.search().list(
-                            channelId=channel_id,
-                            type='video',
-                            part='id',
-                            publishedAfter=one_month_ago,
-                            maxResults=50
-                        )
-                        views_response = views_request.execute()
-                        video_ids = [vid['id']['videoId'] for vid in views_response['items']]
-                        if video_ids:
-                            videos_request = youtube.videos().list(
-                                part='statistics',
-                                id=','.join(video_ids)
-                            )
-                            videos_response = videos_request.execute()
-                            total_views = sum(int(video['statistics'].get('viewCount', 0)) for video in videos_response['items'])
-                            data['avg_views_last_month'] = total_views / len(videos_response['items']) if videos_response['items'] else 'N/A'
-            except HttpError as e:
-                if e.resp.status in [403, 429]:
-                    try:
-                        youtube = yt_manager.next()
-                    except Exception:
-                        pass
-                print(f"Error fetching channel {channel_id}: {e}")
-                continue
+                        try:
+                            one_month_ago = (datetime.utcnow() - timedelta(days=30)).isoformat() + 'Z'
+                            views_request = youtube.search().list(channelId=channel_id, type='video', part='id', publishedAfter=one_month_ago, maxResults=50)
+                            views_response = views_request.execute()
+                            video_ids = [vid['id']['videoId'] for vid in views_response['items']]
+                            if video_ids:
+                                videos_request = youtube.videos().list(part='statistics', id=','.join(video_ids))
+                                videos_response = videos_request.execute()
+                                total_views = sum(int(video['statistics'].get('viewCount', 0)) for video in videos_response['items'])
+                                data['avg_views_last_month'] = total_views / len(videos_response['items']) if videos_response['items'] else 'N/A'
+                        except: pass
+                        
+                    successful_channel_ids.add(channel_id)
+        except HttpError as e:
+            if e.resp.status in [403, 429]:
+                try:
+                    youtube = yt_manager.next()
+                    print("Swapped to next API key during details fetch.")
+                except Exception:
+                    print("All keys exhausted during channel detail fetching.")
+                    api_exhausted = True
+            print(f"Error fetching channel batch: {e}")
+            continue
+
+    # Only keep the channels we successfully fully-populated! Missing quota channels will be completely ignored and discovered fresh tomorrow.
+    new_channel_ids = successful_channel_ids
     
     # Write to Google Sheet contextually
     if google_sheet and sheet_obj:
@@ -312,8 +323,9 @@ def discover_channels(output_file, max_new=1000, queries=None, include_recent_da
                     ';'.join(data['emails']),
                     ';'.join(data['links']),
                     ';'.join(data.get('queries', [])),
-                    data['recent_video_date'],
-                    data['avg_views_last_month']
+                    data.get('recent_video_date', 'N/A'),
+                    data.get('avg_views_last_month', 'N/A'),
+                    data.get('discovered_at', '')
                 ])
             try:
                 # table_range="A1" ensures it anchors the append to column A, preventing horizontal shifting!
@@ -362,8 +374,9 @@ def discover_channels(output_file, max_new=1000, queries=None, include_recent_da
                     'emails': ';'.join(data['emails']),
                     'links': ';'.join(data['links']),
                     'queries': ';'.join(data.get('queries', [])),
-                    'recent_video_date': data['recent_video_date'],
-                    'avg_views_last_month': data['avg_views_last_month']
+                    'recent_video_date': data.get('recent_video_date', 'N/A'),
+                    'avg_views_last_month': data.get('avg_views_last_month', 'N/A'),
+                    'discovered_at': data.get('discovered_at', '')
                 })
 
 if __name__ == '__main__':
