@@ -20,21 +20,53 @@ import random
 def generate_queries():
     """Procedurally generate an infinite matrix of unique gaming queries."""
     topics = [
+        # Digital card games
         "hearthstone", "magic the gathering", "pokemon tcg", "yu-gi-oh", 
-        "slay the spire", "balatro", "hades", "binding of isaac", "roblox", 
-        "marvel snap", "gwent", "legends of runeterra", "inscryption", 
-        "monster train", "deckbuilder", "indie game", "roguelike", 
-        "roguelite", "metroidvania", "gacha", "rpg maker", 
-        "cozy game", "pixel art", "survivor.io", "strategy card"
+        "marvel snap", "gwent", "legends of runeterra",
+        # Roguelikes / deckbuilders
+        "slay the spire", "balatro", "hades", "binding of isaac",
+        "inscryption", "monster train", "deckbuilder", "roguelike", 
+        "roguelite", "metroidvania",
+        # Specific roguelike titles (to catch roguelike reviewers)
+        "dead cells", "enter the gungeon", "vampire survivors", "risk of rain",
+        "cult of the lamb", "noita", "spelunky",
+        # TCG / Physical card games
+        "tcg", "trading card game", "card opening", "pokemon cards",
+        "one piece tcg", "flesh and blood tcg", "digimon tcg", "card unboxing",
+        # Board / tabletop games
+        "board game", "tabletop game", "tabletop rpg", "dungeons and dragons",
+        # Indie game discovery
+        "indie game", "indie game review", "hidden gem game", "steam indie",
+        "upcoming indie games",
+        # Game dev
+        "game development", "game design", "godot game", "unity game dev",
+        # Cozy / life sim
+        "cozy game", "farming sim", "stardew valley", "animal crossing",
+        "cozy indie game",
+        # Strategy / 4X
+        "civilization game", "total war", "grand strategy", "4x game",
+        # Horror
+        "indie horror game", "psychological horror game",
+        # General reviews / news
+        "game review", "gaming news", "steam game review",
+        # Mobile
+        "mobile indie game",
+        # Steam / PC
+        "steam deck game", "pc game review",
+        # Other
+        "roblox", "gacha", "rpg maker", "pixel art", "survivor.io",
+        "strategy card"
     ]
     modifiers = [
         "gameplay", "demo", "review", "showcase", "devlog", "trailer", 
         "speedrun", "hidden gem", "walkthrough", "let's play", "tips", 
         "guide", "box break", "packs", "pulls", "beta", "early access",
-        "first impressions", "update", "new content"
+        "first impressions", "update", "new content",
+        # New modifiers for broader reach
+        "top 10", "best games", "new releases", "worth playing", "underrated"
     ]
     
-    # Generate cross-product (e.g. "roblox devlog", "hades speedrun") = 500+ combos
+    # Generate cross-product = 1700+ combos
     all_combos = [f"{t} {m}" for t in topics for m in modifiers]
     all_combos.extend(topics) # Add base topics
     all_combos.append("steam next fest")
@@ -110,6 +142,20 @@ def discover_channels(output_file, max_new=1000, queries=None, include_recent_da
             if not data:
                 sheet_obj.append_row(fieldnames)
             else:
+                # Validate header row — if row 1 doesn't match expected fieldnames, insert it
+                header_row = data[0]
+                if header_row != fieldnames:
+                    if header_row[0].strip().startswith('UC'):
+                        # Row 1 is data, not a header — insert header above it
+                        sheet_obj.insert_row(fieldnames, index=1)
+                        print("Inserted missing header row into Google Sheet.")
+                        # Re-fetch data after header insertion (indices shifted by 1)
+                        data = sheet_obj.get_all_values()
+                    else:
+                        # Header exists but may be outdated — update it
+                        sheet_obj.update('A1', [fieldnames])
+                        print("Updated header row in Google Sheet.")
+
                 for idx, row in enumerate(data[1:], start=2): # 1-based indexing in sheets, row 1 is header
                     if len(row) > 0 and row[0].strip():
                         existing_qs = row[13].split(';') if len(row) > 13 else []
