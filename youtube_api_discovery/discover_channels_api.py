@@ -16,6 +16,40 @@ import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 
 import random
+import requests
+from langdetect import detect
+from langdetect.lang_detect_exception import LangDetectException
+
+def send_discord_notification(webhook_url, summary):
+    """Sends a formatted summary to a Discord webhook."""
+    if not webhook_url:
+        return
+        
+    status_emoji = "✅" if not summary['api_exhausted'] else "⚠️"
+    error_summary = ""
+    if summary.get('errors'):
+        error_summary = "\n**Errors Encountered:**\n" + "\n".join([f"- {err}" for err in summary['errors'][:5]])
+        if len(summary['errors']) > 5:
+            error_summary += f"\n- ...and {len(summary['errors']) - 5} more errors."
+
+    results_summary = ""
+    if summary.get('sample_channels'):
+        results_summary = "\n**New Channels (Sample):**\n" + "\n".join([f"- {name}" for name in summary['sample_channels']])
+
+    content = f"""
+**{status_emoji} YouTube Scraper Run Complete**
+- **New Channels Found:** {summary['new_channels_found']}
+- **API Keys Used:** {summary['api_keys_used']} / {summary['total_keys']}
+- **Quota Status:** {'EXHAUSTED' if summary['api_exhausted'] else 'OK'}
+- **Date Window:** Rotating (7d, 30d, 90d, All-Time)
+{results_summary}
+{error_summary}
+    """
+    
+    try:
+        requests.post(webhook_url, json={"content": content})
+    except Exception as e:
+        print(f"Error sending Discord notification: {e}")
 
 def generate_queries():
     """Procedurally generate an infinite matrix of unique gaming queries."""
@@ -55,7 +89,13 @@ def generate_queries():
         "steam deck game", "pc game review",
         # Other
         "roblox", "gacha", "rpg maker", "pixel art", "survivor.io",
-        "strategy card"
+        "strategy card",
+        # NEW NICHES TO CAPTURE OLD KOLs
+        "minecraft", "roblox", "fortnite", "valorant", "league of legends",
+        "personal finance", "investing", "financial audit", "money talk",
+        "board game review", "tabletop simulator",
+        "jogos", "videojuegos", "gaming brasil", "gaming españa", "gaming mexico", "gaming france",
+        "indie game dev", "gamedev log", "how to make a game"
     ]
     modifiers = [
         "gameplay", "demo", "review", "showcase", "devlog", "trailer", 
@@ -63,7 +103,8 @@ def generate_queries():
         "guide", "box break", "packs", "pulls", "beta", "early access",
         "first impressions", "update", "new content",
         # New modifiers for broader reach
-        "top 10", "best games", "new releases", "worth playing", "underrated"
+        "top 10", "best games", "new releases", "worth playing", "underrated",
+        "in 2026", "news", "explained", "tier list", "versus"
     ]
     
     # Generate cross-product = 1700+ combos
@@ -115,7 +156,7 @@ def get_gspread_client(creds_file="google_credentials.json"):
     client = gspread.authorize(creds)
     return client
 
-def discover_channels(output_file, max_new=1000, queries=None, include_recent_date=False, include_avg_views=False, existing_csv=None, api_keys=None, google_sheet=None):
+def discover_channels(output_file, max_new=1000, queries=None, include_recent_date=False, include_avg_views=False, existing_csv=None, api_keys=None, google_sheet=None, dry_run=False):
     if queries is None:
         queries = QUERIES
         
@@ -125,12 +166,13 @@ def discover_channels(output_file, max_new=1000, queries=None, include_recent_da
     channels = {}
     new_channel_ids = set()
     sheet_obj = None
+    run_errors = []
     
     fieldnames = [
         'channel_id', 'channel_name', 'channel_url', 'custom_url', 'subscribers', 
         'view_count', 'video_count', 'country', 'default_language', 'published_at',
         'channel_description', 'emails', 'links', 'queries', 
-        'recent_video_date', 'avg_views_last_month', 'discovered_at'
+        'recent_video_date', 'avg_views_last_month', 'discovered_at', 'description_language'
     ]
 
     # Google Sheets Initialization
@@ -202,76 +244,116 @@ def discover_channels(output_file, max_new=1000, queries=None, include_recent_da
     # API Exhaustion tracker
     api_exhausted = False
     
+    # Setup rotation parameters (7, 30, 90 days, or None/All-Time)
+    date_windows = [
+        (datetime.utcnow() - timedelta(days=7)).strftime('%Y-%m-%dT00:00:00Z'),
+        (datetime.utcnow() - timedelta(days=30)).strftime('%Y-%m-%dT00:00:00Z'),
+        (datetime.utcnow() - timedelta(days=90)).strftime('%Y-%m-%dT00:00:00Z'),
+        None # All-time
+    ]
+    search_orders = ['relevance', 'date', 'viewCount', 'rating']
+    
     # Collect new channels
     for query in queries:
         if total_channels >= max_total or api_exhausted:
             break
-        page_token = None
-        while total_channels < max_total:
-            try:
-                search_request = youtube.search().list(
-                    q=query,
-                    type='video',
-                    part='snippet',
-                    maxResults=50,
-                    order='relevance',
-                    pageToken=page_token
-                )
-                search_response = search_request.execute()
+            
+        # Rotate search order, date window, and type for each query
+        current_order = random.choice(search_orders)
+        current_date_window = random.choice(date_windows)
+        # Occasionally search for type='channel' directly (bypass date filters)
+        search_types = ['video', 'channel'] if random.random() < 0.3 else ['video']
+        
+        for s_type in search_types:
+            page_token = None
+            page_count = 0
+            while total_channels < max_total and page_count < 2: # Limit to 2 pages per query to spread quota
+                if dry_run:
+                    print(f"[DRY-RUN] Would search: query='{query}', type='{s_type}', order='{current_order}', publishedAfter='{current_date_window}'")
+                    page_count = 2 # Stop after one "page" log
+                    continue
+                    
+                try:
+                    search_params = {
+                        'q': query,
+                        'type': s_type,
+                        'part': 'snippet',
+                        'maxResults': 50,
+                        'order': current_order,
+                        'pageToken': page_token
+                    }
+                    # Only apply date filter to 'video' searches (channels don't have publishedAfter in search.list)
+                    if s_type == 'video' and current_date_window:
+                        search_params['publishedAfter'] = current_date_window
+                        
+                    search_request = youtube.search().list(**search_params)
+                    search_response = search_request.execute()
+                    
+                    for item in search_response['items']:
+                        if s_type == 'video':
+                            channel_id = item['snippet']['channelId']
+                            channel_name = item['snippet']['channelTitle']
+                        else: # type='channel'
+                            channel_id = item['snippet']['channelId']
+                            channel_name = item['snippet']['title']
+                            
+                        if channel_id not in channels:
+                            channels[channel_id] = {
+                                'channel_name': channel_name,
+                                'channel_url': f'https://www.youtube.com/channel/{channel_id}',
+                                'channel_description': '',
+                                'emails': [],
+                                'links': [],
+                                'subscribers': 'N/A',
+                                'recent_video_date': 'N/A',
+                                'avg_views_last_month': 'N/A',
+                                'queries': [query],
+                                'custom_url': '',
+                                'country': '',
+                                'default_language': '',
+                                'published_at': '',
+                                'view_count': '',
+                                'video_count': '',
+                                'discovered_at': datetime.utcnow().isoformat() + 'Z'
+                            }
+                            new_channel_ids.add(channel_id)
+                            total_channels += 1
+                            if total_channels >= max_total:
+                                break
+                        else:
+                            # Add overlapping query tagging (both for remote & newly discovered records)
+                            c_data = channels[channel_id]
+                            if c_data.get('is_remote'):
+                                if query not in c_data['queries']:
+                                    c_data['queries'].append(query)
+                                    c_data['updated_queries'] = True
+                            else:
+                                if query not in c_data.get('queries', []):
+                                    c_data.setdefault('queries', []).append(query)
                 
-                for item in search_response['items']:
-                    channel_id = item['snippet']['channelId']
-                    if channel_id not in channels:
-                        channels[channel_id] = {
-                            'channel_name': item['snippet']['channelTitle'],
-                            'channel_url': f'https://www.youtube.com/channel/{channel_id}',
-                            'channel_description': '',
-                            'emails': [],
-                            'links': [],
-                            'subscribers': 'N/A',
-                            'recent_video_date': 'N/A',
-                            'avg_views_last_month': 'N/A',
-                            'queries': [query],
-                            'custom_url': '',
-                            'country': '',
-                            'default_language': '',
-                            'published_at': '',
-                            'view_count': '',
-                            'video_count': '',
-                            'discovered_at': datetime.utcnow().isoformat() + 'Z'
-                        }
-                        new_channel_ids.add(channel_id)
-                        total_channels += 1
-                        if total_channels >= max_total:
+                    page_token = search_response.get('nextPageToken')
+                    page_count += 1
+                    if not page_token or total_channels >= max_total:
+                        break
+                except HttpError as e:
+                    error_data = json.loads(e.content)
+                    reason = error_data.get('error', {}).get('errors', [{}])[0].get('reason', 'unknown')
+                    message = error_data.get('error', {}).get('message', 'No message')
+                    
+                    if e.resp.status in [403, 429] and (reason == 'quotaExceeded' or 'quota' in message.lower()):
+                        print(f"Quota exceeded backing off or swapping keys... (Reason: {reason})")
+                        try:
+                            youtube = yt_manager.next()
+                            print("Swapped to next API key.")
+                            continue
+                        except Exception:
+                            print("All keys exhausted.")
                             break
                     else:
-                        # Add overlapping query tagging (both for remote & newly discovered records)
-                        c_data = channels[channel_id]
-                        if c_data.get('is_remote'):
-                            if query not in c_data['queries']:
-                                c_data['queries'].append(query)
-                                c_data['updated_queries'] = True
-                        else:
-                            if query not in c_data.get('queries', []):
-                                c_data.setdefault('queries', []).append(query)
-                
-                page_token = search_response.get('nextPageToken')
-                if not page_token or total_channels >= max_total:
+                        err_msg = f"[{e.resp.status}] {reason} - {message}"
+                        print(f"Error searching for {query} ({s_type}): {err_msg}")
+                        run_errors.append(err_msg)
                     break
-            except HttpError as e:
-                if e.resp.status in [403, 429]:
-                    print(f"Quota exceeded backing off or swapping keys...")
-                    try:
-                        youtube = yt_manager.next()
-                        print("Swapped to next API key.")
-                        continue
-                    except Exception:
-                        print("All keys exhausted.")
-                        api_exhausted = True
-                        break
-                else:
-                    print(f"Error searching for {query}: {e}")
-                break
     
     # Fetch descriptions and stats for new channels only (BATCHED FOR EFFICIENCY)
     successful_channel_ids = set()
@@ -310,6 +392,14 @@ def discover_channels(output_file, max_new=1000, queries=None, include_recent_da
                     data['default_language'] = snippet.get('defaultLanguage', '')
                     data['published_at'] = snippet.get('publishedAt', '')
                     
+                    # Language detection
+                    data['description_language'] = 'unknown'
+                    if description.strip():
+                        try:
+                            data['description_language'] = detect(description)
+                        except LangDetectException:
+                            pass
+                    
                     # Optional heavy loops per channel
                     if include_recent_date:
                         try:
@@ -334,20 +424,51 @@ def discover_channels(output_file, max_new=1000, queries=None, include_recent_da
                         
                     successful_channel_ids.add(channel_id)
         except HttpError as e:
-            if e.resp.status in [403, 429]:
+            error_data = json.loads(e.content)
+            reason = error_data.get('error', {}).get('errors', [{}])[0].get('reason', 'unknown')
+            message = error_data.get('error', {}).get('message', 'No message')
+            
+            if e.resp.status in [403, 429] and (reason == 'quotaExceeded' or 'quota' in message.lower()):
                 try:
                     youtube = yt_manager.next()
-                    print("Swapped to next API key during details fetch.")
+                    print(f"Swapped to next API key during details fetch. (Reason: {reason})")
+                    continue
                 except Exception:
                     print("All keys exhausted during channel detail fetching.")
                     api_exhausted = True
-            print(f"Error fetching channel batch: {e}")
+            err_msg = f"[{e.resp.status}] {reason} - {message}"
+            print(f"Error fetching channel batch: {err_msg}")
+            run_errors.append(err_msg)
             continue
 
     # Only keep the channels we successfully fully-populated! Missing quota channels will be completely ignored and discovered fresh tomorrow.
     new_channel_ids = successful_channel_ids
     
-    # Write to Google Sheet contextually
+    # Final summary stats
+    sample_names = []
+    for cid in list(new_channel_ids)[:5]:
+        if cid in channels:
+            sample_names.append(channels[cid]['channel_name'])
+
+    summary = {
+        'new_channels_found': len(new_channel_ids),
+        'sample_channels': sample_names,
+        'api_keys_used': yt_manager.current_idx + 1,
+        'total_keys': len(yt_manager.api_keys),
+        'api_exhausted': api_exhausted,
+        'errors': list(set(run_errors)) # Unique errors list
+    }
+
+    if dry_run:
+        print("[DRY-RUN] Skipping Google Sheets/CSV write.")
+        # Print summary and return early
+        print("\n" + "="*40)
+        print("       YOUTUBE SCRAPER DRY-RUN SUMMARY")
+        print("="*40)
+        print(f"Date Window:         Rotating (7d, 30d, 90d, All-Time)")
+        print("="*40 + "\n")
+        return
+
     if google_sheet and sheet_obj:
         if new_channel_ids:
             new_rows = []
@@ -371,7 +492,8 @@ def discover_channels(output_file, max_new=1000, queries=None, include_recent_da
                     ';'.join(data.get('queries', [])),
                     data.get('recent_video_date', 'N/A'),
                     data.get('avg_views_last_month', 'N/A'),
-                    data.get('discovered_at', '')
+                    data.get('discovered_at', ''),
+                    data.get('description_language', 'unknown')
                 ])
             try:
                 # table_range="A1" ensures it anchors the append to column A, preventing horizontal shifting!
@@ -398,6 +520,17 @@ def discover_channels(output_file, max_new=1000, queries=None, include_recent_da
                 print(f"Updated query tags for {len(updates)} existing channels in the Google Sheet.")
             except Exception as e:
                 print(f"Error batch updating queries: {e}")
+                
+        # Handle the new column header in the Google Sheet if it's missing
+        try:
+            header_row = sheet_obj.row_values(1)
+            if 'description_language' not in header_row:
+                # Add the new header to column R (18th column)
+                sheet_obj.update_cell(1, 18, 'description_language')
+                print("Added 'description_language' header to Google Sheet.")
+        except Exception as e:
+            print(f"Error updating header for description_language: {e}")
+    
     else:
         # Write to local CSV
         with open(output_file, 'w', newline='', encoding='utf-8') as csvfile:
@@ -422,8 +555,24 @@ def discover_channels(output_file, max_new=1000, queries=None, include_recent_da
                     'queries': ';'.join(data.get('queries', [])),
                     'recent_video_date': data.get('recent_video_date', 'N/A'),
                     'avg_views_last_month': data.get('avg_views_last_month', 'N/A'),
-                    'discovered_at': data.get('discovered_at', '')
+                    'discovered_at': data.get('discovered_at', ''),
+                    'description_language': data.get('description_language', 'unknown')
                 })
+
+    # Print Final Run Summary
+    print("\n" + "="*40)
+    print("       YOUTUBE SCRAPER RUN SUMMARY")
+    print("="*40)
+    print(f"New Channels Found:  {summary['new_channels_found']}")
+    print(f"API Keys Used:       {summary['api_keys_used']} / {summary['total_keys']}")
+    print(f"Quota Status:        {'EXHAUSTED' if summary['api_exhausted'] else 'OK'}")
+    print(f"Date Window:         Rotating (7d, 30d, 90d, All-Time)")
+    print("="*40 + "\n")
+    
+    # Send Discord notification (if webhook is provided in env)
+    webhook_url = os.getenv('DISCORD_WEBHOOK_URL')
+    if webhook_url:
+        send_discord_notification(webhook_url, summary)
 
 if __name__ == '__main__':
     import argparse
@@ -436,8 +585,9 @@ if __name__ == '__main__':
     parser.add_argument('--existing-csv', help='Path to existing CSV with channel_id column')
     parser.add_argument('--api-keys', help='Comma-separated YouTube API keys', required=True)
     parser.add_argument('--google-sheet', help='Name of the Google Sheet (e.g. YT_Scraper_DB) to append to instead of saving CSV')
+    parser.add_argument('--dry-run', action='store_true', help='Dry run: print search parameters without calling API')
     args = parser.parse_args()
     
     queries = [args.query] if args.query else QUERIES
     keys = [k.strip() for k in args.api_keys.split(',')]
-    discover_channels(args.output, args.max_channels, queries, args.include_recent_date, args.include_avg_views, args.existing_csv, keys, args.google_sheet)
+    discover_channels(args.output, args.max_channels, queries, args.include_recent_date, args.include_avg_views, args.existing_csv, keys, args.google_sheet, args.dry_run)

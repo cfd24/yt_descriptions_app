@@ -33,9 +33,9 @@ jobs:
       - name: Run YouTube Discovery Scraper
         env:
           YOUTUBE_API_KEYS: ${{ secrets.YOUTUBE_API_KEYS }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: |
-          # We set max-channels to an absurd limit (10k) so it doesn't stop arbitrarily, 
-          # but rather runs continuously until all API quota units from all 5 keys are fully exhausted!
+          # Runs until all API quota units from all 8 keys (80,000 units) are exhausted!
           python youtube_api_discovery/discover_channels_api.py --api-keys "$YOUTUBE_API_KEYS" --google-sheet "YT_Scraper_DB" --max-channels 10000
           
       - name: Clean up credentials
