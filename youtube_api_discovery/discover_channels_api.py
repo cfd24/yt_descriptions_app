@@ -38,11 +38,24 @@ def send_discord_notification(webhook_url, summary):
         results_summary = "\n**New Channels (Sample):**\n" + "\n".join([f"- {name}" for name in summary['sample_channels']])
 
     content = f"""
+    duration = summary.get('duration', 'unknown')
+    niche_summary = ""
+    if summary.get('top_niches'):
+        niche_summary = "\n**Top Niches:**\n" + "\n".join([f"- {n}: {c} found" for n, c in summary['top_niches']])
+
+    efficiency = 0
+    if summary.get('searches_performed', 0) > 0:
+        efficiency = round(summary['new_channels_found'] / summary['searches_performed'], 2)
+
+    content = f"""
 **{status_emoji} YouTube Scraper Run Complete**
 - **New Channels Found:** {summary['new_channels_found']}
+- **Search Efficiency:** {efficiency} new/search
 - **API Keys Used:** {summary['api_keys_used']} / {summary['total_keys']}
+- **Run Duration:** {duration}
 - **Quota Status:** {'EXHAUSTED' if summary['api_exhausted'] else 'OK'}
 - **Date Window:** Rotating (7d, 30d, 90d, All-Time)
+{niche_summary}
 {results_summary}
 {error_summary}
     """
@@ -168,6 +181,9 @@ def discover_channels(output_file, max_new=1000, queries=None, include_recent_da
     new_channel_ids = set()
     sheet_obj = None
     run_errors = []
+    start_time = datetime.now(timezone.utc)
+    searches_performed = 0
+    niche_performance = {} # Track new channels found per topic
     
     fieldnames = [
         'channel_id', 'channel_name', 'channel_url', 'custom_url', 'subscribers', 
@@ -289,7 +305,10 @@ def discover_channels(output_file, max_new=1000, queries=None, include_recent_da
                         
                     search_request = youtube.search().list(**search_params)
                     search_response = search_request.execute()
+                    searches_performed += 1
                     
+                    # Identify the base niche (the first word of the query usually)
+                    niche = query.split(' ')[0]
                     for item in search_response['items']:
                         if s_type == 'video':
                             channel_id = item['snippet']['channelId']
@@ -319,6 +338,7 @@ def discover_channels(output_file, max_new=1000, queries=None, include_recent_da
                             }
                             new_channel_ids.add(channel_id)
                             total_channels += 1
+                            niche_performance[niche] = niche_performance.get(niche, 0) + 1
                             if total_channels >= max_total:
                                 break
                         else:
@@ -442,13 +462,23 @@ def discover_channels(output_file, max_new=1000, queries=None, include_recent_da
         if cid in channels:
             sample_names.append(channels[cid]['channel_name'])
 
+    end_time = datetime.now(timezone.utc)
+    duration_secs = (end_time - start_time).total_seconds()
+    duration_str = f"{int(duration_secs // 60)}m {int(duration_secs % 60)}s"
+    
+    # Sort and get top 3 niches
+    top_niches = sorted(niche_performance.items(), key=lambda x: x[1], reverse=True)[:3]
+
     summary = {
         'new_channels_found': len(new_channel_ids),
         'sample_channels': sample_names,
         'api_keys_used': min(yt_manager.current_idx + 1, len(yt_manager.api_keys)),
         'total_keys': len(yt_manager.api_keys),
         'api_exhausted': api_exhausted,
-        'errors': list(set(run_errors)) # Unique errors list
+        'errors': list(set(run_errors)), # Unique errors list
+        'duration': duration_str,
+        'searches_performed': searches_performed,
+        'top_niches': top_niches
     }
 
     if dry_run:
