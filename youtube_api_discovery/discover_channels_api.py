@@ -195,7 +195,7 @@ def discover_channels(output_file, max_new=1000, queries=None, include_recent_da
                         data = sheet_obj.get_all_values()
                     else:
                         # Header exists but may be outdated — update it
-                        sheet_obj.update('A1', [fieldnames])
+                        sheet_obj.update(values=[fieldnames], range_name='A1')
                         print("Updated header row in Google Sheet.")
 
                 for idx, row in enumerate(data[1:], start=2): # 1-based indexing in sheets, row 1 is header
