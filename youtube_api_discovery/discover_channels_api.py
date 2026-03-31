@@ -8,12 +8,13 @@ Output CSV with channel info and emails, or append directly to a Google Sheet.
 
 import csv
 import os
-from googleapiclient.discovery import build
-from googleapiclient.errors import HttpError
+import json
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
+from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 
 import random
 import requests
