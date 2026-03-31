@@ -33,11 +33,6 @@ def send_discord_notification(webhook_url, summary):
         if len(summary['errors']) > 5:
             error_summary += f"\n- ...and {len(summary['errors']) - 5} more errors."
 
-    results_summary = ""
-    if summary.get('sample_channels'):
-        results_summary = "\n**New Channels (Sample):**\n" + "\n".join([f"- {name}" for name in summary['sample_channels']])
-
-    content = f"""
     duration = summary.get('duration', 'unknown')
     niche_summary = ""
     if summary.get('top_niches'):
