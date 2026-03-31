@@ -247,9 +247,9 @@ def discover_channels(output_file, max_new=1000, queries=None, include_recent_da
     
     # Setup rotation parameters (7, 30, 90 days, or None/All-Time)
     date_windows = [
-        (datetime.utcnow() - timedelta(days=7)).strftime('%Y-%m-%dT00:00:00Z'),
-        (datetime.utcnow() - timedelta(days=30)).strftime('%Y-%m-%dT00:00:00Z'),
-        (datetime.utcnow() - timedelta(days=90)).strftime('%Y-%m-%dT00:00:00Z'),
+        (datetime.now(timezone.utc) - timedelta(days=7)).strftime('%Y-%m-%dT00:00:00Z'),
+        (datetime.now(timezone.utc) - timedelta(days=30)).strftime('%Y-%m-%dT00:00:00Z'),
+        (datetime.now(timezone.utc) - timedelta(days=90)).strftime('%Y-%m-%dT00:00:00Z'),
         None # All-time
     ]
     search_orders = ['relevance', 'date', 'viewCount', 'rating']
@@ -315,7 +315,7 @@ def discover_channels(output_file, max_new=1000, queries=None, include_recent_da
                                 'published_at': '',
                                 'view_count': '',
                                 'video_count': '',
-                                'discovered_at': datetime.utcnow().isoformat() + 'Z'
+                                'discovered_at': datetime.now(timezone.utc).isoformat() + 'Z'
                             }
                             new_channel_ids.add(channel_id)
                             total_channels += 1
@@ -412,7 +412,7 @@ def discover_channels(output_file, max_new=1000, queries=None, include_recent_da
                     
                     if include_avg_views:
                         try:
-                            one_month_ago = (datetime.utcnow() - timedelta(days=30)).isoformat() + 'Z'
+                            one_month_ago = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat() + 'Z'
                             views_request = youtube.search().list(channelId=channel_id, type='video', part='id', publishedAfter=one_month_ago, maxResults=50)
                             views_response = views_request.execute()
                             video_ids = [vid['id']['videoId'] for vid in views_response['items']]
