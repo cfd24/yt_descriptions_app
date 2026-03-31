@@ -349,6 +349,7 @@ def discover_channels(output_file, max_new=1000, queries=None, include_recent_da
                             continue
                         except Exception:
                             print("All keys exhausted.")
+                            api_exhausted = True
                             break
                     else:
                         err_msg = f"[{e.resp.status}] {reason} - {message}"
@@ -437,6 +438,7 @@ def discover_channels(output_file, max_new=1000, queries=None, include_recent_da
                 except Exception:
                     print("All keys exhausted during channel detail fetching.")
                     api_exhausted = True
+                    break
             err_msg = f"[{e.resp.status}] {reason} - {message}"
             print(f"Error fetching channel batch: {err_msg}")
             run_errors.append(err_msg)
@@ -454,7 +456,7 @@ def discover_channels(output_file, max_new=1000, queries=None, include_recent_da
     summary = {
         'new_channels_found': len(new_channel_ids),
         'sample_channels': sample_names,
-        'api_keys_used': yt_manager.current_idx + 1,
+        'api_keys_used': min(yt_manager.current_idx + 1, len(yt_manager.api_keys)),
         'total_keys': len(yt_manager.api_keys),
         'api_exhausted': api_exhausted,
         'errors': list(set(run_errors)) # Unique errors list
