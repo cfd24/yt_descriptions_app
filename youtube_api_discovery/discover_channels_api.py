@@ -453,6 +453,7 @@ def discover_channels(output_file, max_new=1000, queries=None, include_recent_da
                         search_params['publishedAfter'] = current_date_window
                         
                     try:
+                        search_request = youtube.search().list(**search_params)
                         search_response = search_request.execute()
                     except Exception as e:
                         if isinstance(e, HttpError): raise e
