@@ -45,13 +45,11 @@ def send_discord_notification(webhook_url, summary):
     content = f"""
 **{status_emoji} YouTube Scraper Run Complete**
 - **New Channels Found:** {summary['new_channels_found']}
-- **Search Efficiency:** {efficiency} new/search
+- **Sources:** Scrape ({summary.get('scrape_count',0)}), Crawl ({summary.get('crawl_count',0)}), Search ({summary.get('search_count',0)})
 - **API Keys Used:** {summary['api_keys_used']} / {summary['total_keys']}
 - **Run Duration:** {duration}
 - **Quota Status:** {'EXHAUSTED' if summary['api_exhausted'] else 'OK'}
-- **Date Window:** Rotating (7d, 30d, 90d, All-Time)
 {niche_summary}
-{results_summary}
 {error_summary}
     """
     
@@ -141,23 +139,131 @@ def extract_links(text):
     links = re.findall(url_pattern, text)
     return list(set(links))
 
-class YouTubeAPIClient:
-    def __init__(self, api_keys):
-        self.api_keys = [k.strip() for k in api_keys if k.strip()]
-        self.current_idx = 0
-        if not self.api_keys:
-            raise ValueError("No valid API keys.")
-        self.client = build('youtube', 'v3', developerKey=self.api_keys[self.current_idx])
+def scrape_channels_frontend(queries, max_new, existing_ids):
+    scraped_ids = set()
+    errors = []
+    import urllib.parse
+    print("Starting Playwright Scraping Mode...")
+    try:
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            page = browser.new_page()
+            
+            for query in queries[:5]:
+                if len(scraped_ids) >= max_new: break
+                try:
+                    q = urllib.parse.quote(query)
+                    page.goto(f"https://www.youtube.com/results?search_query={q}&sp=EgIQAg%253D%253D", timeout=15000)
+                    page.wait_for_selector('ytd-channel-renderer', timeout=5000)
+                    hrefs = page.evaluate('''() => {
+                        return Array.from(document.querySelectorAll('ytd-channel-renderer a#main-link')).map(a => a.href);
+                    }''')
+                    for href in hrefs:
+                        if href and '/@' in href:
+                            try:
+                                r = requests.get(href, timeout=5)
+                                match = re.search(r'"channelId":"(UC[\w-]{22})"', r.text)
+                                if match:
+                                    cid = match.group(1)
+                                    if cid not in existing_ids: scraped_ids.add(cid)
+                            except: pass
+                        elif href and '/channel/' in href:
+                            cid = href.split('/channel/')[-1].split('/')[0]
+                            if cid not in existing_ids: scraped_ids.add(cid)
+                except Exception as e:
+                    errors.append(f"Scrape warning '{query}': {str(e)}")
+            browser.close()
+    except Exception as e:
+        errors.append(f"Playwright failed: {str(e)}")
+        
+    return scraped_ids, errors
 
-    def get(self):
-        return self.client
+def crawl_channels_api(youtube, seed_ids, max_new, existing_ids):
+    crawled_ids = set()
+    errors = []
+    print("Starting API Crawling Mode...")
+    if not seed_ids: return crawled_ids, errors
+        
+    seeds = random.sample(list(seed_ids), min(10, len(seed_ids)))
+    for seed in seeds:
+        if len(crawled_ids) >= max_new: break
+        try:
+            req = youtube.subscriptions().list(channelId=seed, part='snippet', maxResults=50)
+            res = req.execute()
+            for item in res.get('items', []):
+                cid = item['snippet']['resourceId'].get('channelId')
+                if cid and cid not in existing_ids:
+                    crawled_ids.add(cid)
+        except HttpError as e:
+            try:
+                err_data = json.loads(e.content)
+                reason = err_data.get('error', {}).get('errors', [{}])[0].get('reason', '')
+                if reason == 'subscriptionForbidden': continue
+            except: pass
+        except Exception as e:
+             errors.append(f"Crawl error on {seed}: {e}")
+    return crawled_ids, errors
 
-    def next(self):
-        self.current_idx += 1
-        if self.current_idx >= len(self.api_keys):
-            raise Exception("All API keys exhausted.")
-        self.client = build('youtube', 'v3', developerKey=self.api_keys[self.current_idx])
-        return self.client
+def batch_populate_channels(youtube, target_ids, channels_dict, include_recent_date, include_avg_views):
+    errors = []
+    target_ids = list(target_ids)
+    for i in range(0, len(target_ids), 50):
+        batch = target_ids[i:i+50]
+        try:
+            req = youtube.channels().list(part='snippet,statistics', id=','.join(batch))
+            res = req.execute()
+            for item in res.get('items', []):
+                cid = item['id']
+                data = channels_dict.get(cid)
+                if not data: continue
+                
+                snippet = item.get('snippet', {})
+                stats = item.get('statistics', {})
+                description = snippet.get('description', '')
+                
+                data['channel_description'] = description
+                data['emails'] = extract_emails(description)
+                data['links'] = extract_links(description)
+                data['subscribers'] = stats.get('subscriberCount', 'N/A')
+                data['view_count'] = stats.get('viewCount', 'N/A')
+                data['video_count'] = stats.get('videoCount', 'N/A')
+                data['custom_url'] = snippet.get('customUrl', '')
+                data['country'] = snippet.get('country', '')
+                data['default_language'] = snippet.get('defaultLanguage', '')
+                data['published_at'] = snippet.get('publishedAt', '')
+                
+                data['description_language'] = 'unknown'
+                if description.strip():
+                    try: data['description_language'] = detect(description)
+                    except LangDetectException: pass
+                
+                # Heavy Optional Loops
+                if include_recent_date:
+                    try:
+                        r = youtube.search().list(channelId=cid, type='video', part='snippet', order='date', maxResults=1).execute()
+                        if r['items']: data['recent_video_date'] = r['items'][0]['snippet']['publishedAt']
+                    except: pass
+                
+                if include_avg_views:
+                    try:
+                        oma = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat() + 'Z'
+                        v_req = youtube.search().list(channelId=cid, type='video', part='id', publishedAfter=oma, maxResults=50)
+                        v_res = v_req.execute()
+                        vids = [v['id']['videoId'] for v in v_res['items']]
+                        if vids:
+                            vstat = youtube.videos().list(part='statistics', id=','.join(vids)).execute()
+                            tot = sum(int(v['statistics'].get('viewCount', 0)) for v in vstat['items'])
+                            data['avg_views_last_month'] = tot / len(vstat['items'])
+                    except: pass
+                    
+                data['populated'] = True
+        except Exception as e:
+            errors.append(f"Batch populate error: {e}")
+            
+    return errors
+
+
 
 def get_gspread_client(creds_file="google_credentials.json"):
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
@@ -165,12 +271,13 @@ def get_gspread_client(creds_file="google_credentials.json"):
     client = gspread.authorize(creds)
     return client
 
-def discover_channels(output_file, max_new=1000, queries=None, include_recent_date=False, include_avg_views=False, existing_csv=None, api_keys=None, google_sheet=None, dry_run=False):
+def discover_channels(output_file, max_new=1000, queries=None, include_recent_date=False, include_avg_views=False, existing_csv=None, api_key=None, google_sheet=None, dry_run=False):
     if queries is None:
         queries = QUERIES
         
-    yt_manager = YouTubeAPIClient(api_keys)
-    youtube = yt_manager.get()
+    if not api_key:
+        raise ValueError("No valid API key provided.")
+    youtube = build('youtube', 'v3', developerKey=api_key.strip())
     
     channels = {}
     new_channel_ids = set()
@@ -252,6 +359,53 @@ def discover_channels(output_file, max_new=1000, queries=None, include_recent_da
     
     max_total = len(channels) + max_new
     total_channels = len(channels)
+    all_existing_ids = set(channels.keys())
+    
+    mode_stats = {'scrape': 0, 'crawl': 0, 'search': 0}
+
+    def init_channel_stub(cid, name, query_tag):
+        return {
+            'channel_name': name,
+            'channel_url': f'https://www.youtube.com/channel/{cid}',
+            'channel_description': '',
+            'emails': [],
+            'links': [],
+            'subscribers': 'N/A',
+            'recent_video_date': 'N/A',
+            'avg_views_last_month': 'N/A',
+            'queries': [query_tag],
+            'custom_url': '',
+            'country': '',
+            'default_language': '',
+            'published_at': '',
+            'view_count': '',
+            'video_count': '',
+            'discovered_at': datetime.now(timezone.utc).isoformat() + 'Z',
+            'populated': False
+        }
+
+    # MODE 1: Scrape
+    if not dry_run and max_new > 0 and len(new_channel_ids) < max_new:
+        scraped_ids, scrape_errs = scrape_channels_frontend(queries, min(10, max_new), all_existing_ids)
+        run_errors.extend(scrape_errs)
+        for cid in scraped_ids:
+            channels[cid] = init_channel_stub(cid, 'Scraped Channel', 'scrape:playwright')
+            new_channel_ids.add(cid)
+            all_existing_ids.add(cid)
+            total_channels += 1
+            mode_stats['scrape'] += 1
+
+    # MODE 2: Crawl
+    if not dry_run and max_new > 0 and len(new_channel_ids) < max_new:
+        seed_pool = [k for k, v in channels.items() if v.get('is_remote')]
+        crawled_ids, crawl_errs = crawl_channels_api(youtube, seed_pool, min(50, max_new - len(new_channel_ids)), all_existing_ids)
+        run_errors.extend(crawl_errs)
+        for cid in crawled_ids:
+            channels[cid] = init_channel_stub(cid, 'Crawled Channel', 'crawl:subscriptions')
+            new_channel_ids.add(cid)
+            all_existing_ids.add(cid)
+            total_channels += 1
+            mode_stats['crawl'] += 1
     
     # API Exhaustion tracker
     api_exhausted = False
@@ -298,44 +452,32 @@ def discover_channels(output_file, max_new=1000, queries=None, include_recent_da
                     if s_type == 'video' and current_date_window:
                         search_params['publishedAfter'] = current_date_window
                         
-                    search_request = youtube.search().list(**search_params)
-                    search_response = search_request.execute()
+                    try:
+                        search_response = search_request.execute()
+                    except Exception as e:
+                        if isinstance(e, HttpError): raise e
+                        run_errors.append(f"Network error during search.list '{query}': {e}")
+                        break
+                        
                     searches_performed += 1
                     
-                    # Identify the base niche (the first word of the query usually)
                     niche = query.split(' ')[0]
-                    for item in search_response['items']:
+                    for item in search_response.get('items', []):
                         if s_type == 'video':
                             channel_id = item['snippet']['channelId']
                             channel_name = item['snippet']['channelTitle']
-                        else: # type='channel'
+                        else:
                             channel_id = item['snippet']['channelId']
                             channel_name = item['snippet']['title']
                             
-                        if channel_id not in channels:
-                            channels[channel_id] = {
-                                'channel_name': channel_name,
-                                'channel_url': f'https://www.youtube.com/channel/{channel_id}',
-                                'channel_description': '',
-                                'emails': [],
-                                'links': [],
-                                'subscribers': 'N/A',
-                                'recent_video_date': 'N/A',
-                                'avg_views_last_month': 'N/A',
-                                'queries': [query],
-                                'custom_url': '',
-                                'country': '',
-                                'default_language': '',
-                                'published_at': '',
-                                'view_count': '',
-                                'video_count': '',
-                                'discovered_at': datetime.now(timezone.utc).isoformat() + 'Z'
-                            }
+                        if channel_id not in all_existing_ids:
+                            channels[channel_id] = init_channel_stub(channel_id, channel_name, f"search:{query}")
                             new_channel_ids.add(channel_id)
+                            all_existing_ids.add(channel_id)
                             total_channels += 1
+                            mode_stats['search'] += 1
                             niche_performance[niche] = niche_performance.get(niche, 0) + 1
-                            if total_channels >= max_total:
-                                break
+                            if total_channels >= max_total: break
                         else:
                             # Add overlapping query tagging (both for remote & newly discovered records)
                             c_data = channels[channel_id]
@@ -347,109 +489,37 @@ def discover_channels(output_file, max_new=1000, queries=None, include_recent_da
                                 if query not in c_data.get('queries', []):
                                     c_data.setdefault('queries', []).append(query)
                 
-                    # IMMEDIATELY fetch details for NEW channels found in this page
-                    # This ensures we don't lose data if we run out of quota later!
-                    page_new_ids = [cid for cid in search_response['items'] if (s_type == 'video' and cid['snippet']['channelId'] in new_channel_ids and not channels[cid['snippet']['channelId']].get('populated')) or (s_type == 'channel' and cid['snippet']['channelId'] in new_channel_ids and not channels[cid['snippet']['channelId']].get('populated'))]
-                    
-                    # More robust way to get ids for just the newly discovered ones in this page
-                    current_page_ids = []
-                    for item in search_response['items']:
-                        cid = item['snippet']['channelId']
-                        if cid in new_channel_ids and not channels[cid].get('populated'):
-                            current_page_ids.append(cid)
-                    
-                    if current_page_ids:
-                        try:
-                            # Process in one batch (max 50)
-                            channel_request = youtube.channels().list(
-                                part='snippet,statistics',
-                                id=','.join(current_page_ids)
-                            )
-                            channel_response = channel_request.execute()
-                            
-                            if 'items' in channel_response:
-                                for item in channel_response['items']:
-                                    channel_id = item['id']
-                                    data = channels[channel_id]
-                                    
-                                    snippet = item.get('snippet', {})
-                                    stats = item.get('statistics', {})
-                                    
-                                    description = snippet.get('description', '')
-                                    data['channel_description'] = description
-                                    data['emails'] = extract_emails(description)
-                                    data['links'] = extract_links(description)
-                                    data['subscribers'] = stats.get('subscriberCount', 'N/A')
-                                    data['view_count'] = stats.get('viewCount', 'N/A')
-                                    data['video_count'] = stats.get('videoCount', 'N/A')
-                                    data['custom_url'] = snippet.get('customUrl', '')
-                                    data['country'] = snippet.get('country', '')
-                                    data['default_language'] = snippet.get('defaultLanguage', '')
-                                    data['published_at'] = snippet.get('publishedAt', '')
-                                    
-                                    # Language detection
-                                    data['description_language'] = 'unknown'
-                                    if description.strip():
-                                        try:
-                                            data['description_language'] = detect(description)
-                                        except LangDetectException:
-                                            pass
-                                    
-                                    # Heavy loops (optional)
-                                    if include_recent_date:
-                                        try:
-                                            recent_request = youtube.search().list(channelId=channel_id, type='video', part='snippet', order='date', maxResults=1)
-                                            recent_response = recent_request.execute()
-                                            if recent_response['items']:
-                                                data['recent_video_date'] = recent_response['items'][0]['snippet']['publishedAt']
-                                        except: pass
-                                    
-                                    if include_avg_views:
-                                        try:
-                                            one_month_ago = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat() + 'Z'
-                                            views_request = youtube.search().list(channelId=channel_id, type='video', part='id', publishedAfter=one_month_ago, maxResults=50)
-                                            views_response = views_request.execute()
-                                            video_ids = [vid['id']['videoId'] for vid in views_response['items']]
-                                            if video_ids:
-                                                videos_request = youtube.videos().list(part='statistics', id=','.join(video_ids))
-                                                videos_response = videos_request.execute()
-                                                total_views = sum(int(video['statistics'].get('viewCount', 0)) for video in videos_response['items'])
-                                                data['avg_views_last_month'] = total_views / len(videos_response['items']) if videos_response['items'] else 'N/A'
-                                        except: pass
-                                    
-                                    data['populated'] = True
-                        except HttpError as e:
-                            # If individual detail fetch fails, we skip and try next search call.
-                            print(f"Detail fetch failed for batch: {e}")
-
                     page_token = search_response.get('nextPageToken')
                     page_count += 1
                     if not page_token or total_channels >= max_total:
                         break
                 except HttpError as e:
-                    error_data = json.loads(e.content)
-                    reason = error_data.get('error', {}).get('errors', [{}])[0].get('reason', 'unknown')
-                    message = error_data.get('error', {}).get('message', 'No message')
+                    try:
+                        error_data = json.loads(e.content)
+                        reason = error_data.get('error', {}).get('errors', [{}])[0].get('reason', 'unknown')
+                        message = error_data.get('error', {}).get('message', 'No message')
+                    except Exception:
+                        reason = 'unknown'
+                        message = str(e.content)
                     
                     if e.resp.status in [403, 429] and (reason == 'quotaExceeded' or 'quota' in message.lower()):
-                        print(f"Quota exceeded backing off or swapping keys... (Reason: {reason})")
-                        try:
-                            youtube = yt_manager.next()
-                            print("Swapped to next API key.")
-                            continue
-                        except Exception:
-                            print("All keys exhausted.")
-                            api_exhausted = True
-                            break
+                        print(f"Quota exceeded. Stopping for today. (Reason: {reason})")
+                        api_exhausted = True
+                        break
                     else:
                         err_msg = f"[{e.resp.status}] {reason} - {message}"
                         print(f"Error searching for {query} ({s_type}): {err_msg}")
                         run_errors.append(err_msg)
                     break
     
-    # All channels in new_channel_ids were already populated in-loop! 
-    # Skip the terminal loop entirely.
-    new_channel_ids = {cid for cid in new_channel_ids if channels[cid].get('populated')}
+    # Populate all new channels at the end
+    if new_channel_ids and not dry_run:
+        print(f"Batch populating details for {len(new_channel_ids)} newly discovered channels...")
+        pop_errs = batch_populate_channels(youtube, new_channel_ids, channels, include_recent_date, include_avg_views)
+        run_errors.extend(pop_errs)
+        
+    # Exclude any channels that failed to populate (if any)
+    new_channel_ids = {cid for cid in new_channel_ids if channels[cid].get('populated', False)}
     
     # Final summary stats
     sample_names = []
@@ -466,9 +536,12 @@ def discover_channels(output_file, max_new=1000, queries=None, include_recent_da
 
     summary = {
         'new_channels_found': len(new_channel_ids),
+        'scrape_count': mode_stats['scrape'],
+        'crawl_count': mode_stats['crawl'],
+        'search_count': mode_stats['search'],
         'sample_channels': sample_names,
-        'api_keys_used': min(yt_manager.current_idx + 1, len(yt_manager.api_keys)),
-        'total_keys': len(yt_manager.api_keys),
+        'api_keys_used': 1,
+        'total_keys': 1,
         'api_exhausted': api_exhausted,
         'errors': list(set(run_errors)), # Unique errors list
         'duration': duration_str,
@@ -600,11 +673,10 @@ if __name__ == '__main__':
     parser.add_argument('--include-recent-date', action='store_true', help='Include most recent video date')
     parser.add_argument('--include-avg-views', action='store_true', help='Include average views last month')
     parser.add_argument('--existing-csv', help='Path to existing CSV with channel_id column')
-    parser.add_argument('--api-keys', help='Comma-separated YouTube API keys', required=True)
+    parser.add_argument('--api-key', help='YouTube Data API key', required=True)
     parser.add_argument('--google-sheet', help='Name of the Google Sheet (e.g. YT_Scraper_DB) to append to instead of saving CSV')
     parser.add_argument('--dry-run', action='store_true', help='Dry run: print search parameters without calling API')
     args = parser.parse_args()
     
     queries = [args.query] if args.query else QUERIES
-    keys = [k.strip() for k in args.api_keys.split(',')]
-    discover_channels(args.output, args.max_channels, queries, args.include_recent_date, args.include_avg_views, args.existing_csv, keys, args.google_sheet, args.dry_run)
+    discover_channels(args.output, args.max_channels, queries, args.include_recent_date, args.include_avg_views, args.existing_csv, args.api_key, args.google_sheet, args.dry_run)

@@ -48,8 +48,8 @@ except FileNotFoundError:
     DEFAULT_API_KEY = ""
 
 with st.expander("⚙️ API Settings & Authentication"):
-    st.markdown("Enter one or more YouTube Data v3 API keys separated by commas. The script will automatically rotate them if one hits quota.")
-    api_keys_str = st.text_input("API Keys", value=DEFAULT_API_KEY, type="password")
+    st.markdown("Enter your YouTube Data v3 API key. Must be a single valid key to comply with Google Cloud TOS.")
+    api_key_str = st.text_input("API Key", value=DEFAULT_API_KEY, type="password")
 
 tab1, tab2 = st.tabs(["🔍 Discover Channels", "📝 Extract Descriptions"])
 
@@ -86,17 +86,16 @@ with tab1:
         extra_cost += max_new_channels * 300
     total_cost = base_cost + channel_cost + extra_cost
     
-    # Calculate dynamic quota limit based on number of keys provided
-    valid_keys = [k.strip() for k in api_keys_str.split(',') if k.strip()]
-    total_quota = 10000 * max(1, len(valid_keys))
+    # Calculate dynamic quota limit based on single key
+    total_quota = 10000
     
     st.metric(label="Estimated API Cost (Units)", value=f"{total_cost:,}", 
-              delta=f"Combined Quota Left: {total_quota - total_cost:,} (approx)" if total_cost <= total_quota else f"Exceeds {total_quota:,}/day limit!", 
+              delta=f"Quota Left: {total_quota - total_cost:,} (approx)" if total_cost <= total_quota else f"Exceeds {total_quota:,}/day limit!", 
               delta_color="normal" if total_cost <= total_quota else "inverse")
     
     if st.button("Discover Channels"):
         with st.spinner("Discovering..."):
-            cmd = [sys.executable, DISCOVER_SCRIPT, '--max-channels', str(max_new_channels), '--output', output_path, '--api-keys', api_keys_str]
+            cmd = [sys.executable, DISCOVER_SCRIPT, '--max-channels', str(max_new_channels), '--output', output_path, '--api-key', api_key_str]
             if query:
                 cmd.extend(['--query', query])
             if include_recent_date:

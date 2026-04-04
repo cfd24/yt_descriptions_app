@@ -30,13 +30,16 @@ jobs:
         run: |
           echo "$GOOGLE_CREDENTIALS_JSON" > google_credentials.json
 
+      - name: Install Playwright Browsers
+        run: npx playwright install chromium
+
       - name: Run YouTube Discovery Scraper
         env:
-          YOUTUBE_API_KEYS: ${{ secrets.YOUTUBE_API_KEYS }}
+          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: |
-          # Runs until all API quota units from all 8 keys (80,000 units) are exhausted!
-          python youtube_api_discovery/discover_channels_api.py --api-keys "$YOUTUBE_API_KEYS" --google-sheet "YT_Scraper_DB" --max-channels 10000
+          # Runs until daily API quota (10,000 units) is exhausted. Must use a single key to comply with TOS.
+          python youtube_api_discovery/discover_channels_api.py --api-key "$YOUTUBE_API_KEY" --google-sheet "YT_Scraper_DB" --max-channels 10000
           
       - name: Clean up credentials
         if: always()
