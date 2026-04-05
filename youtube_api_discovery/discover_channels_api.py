@@ -24,12 +24,20 @@ from langdetect.lang_detect_exception import LangDetectException
 def send_discord_notification(webhook_url, summary):
     """Sends a formatted summary to a Discord webhook."""
     if not webhook_url:
+        print("No DISCORD_WEBHOOK_URL provided, skipping notification.")
         return
         
     status_emoji = "✅" if not summary['api_exhausted'] else "⚠️"
     error_summary = ""
     if summary.get('errors'):
-        error_summary = "\n**Errors Encountered:**\n" + "\n".join([f"- {err}" for err in summary['errors'][:5]])
+        # Truncate each error to max 150 chars just to be safe
+        truncated_errors = []
+        for err in summary['errors'][:5]:
+            err_str = str(err)
+            if len(err_str) > 150:
+                err_str = err_str[:147] + "..."
+            truncated_errors.append(err_str)
+        error_summary = "\n**Errors Encountered:**\n" + "\n".join([f"- {err}" for err in truncated_errors])
         if len(summary['errors']) > 5:
             error_summary += f"\n- ...and {len(summary['errors']) - 5} more errors."
 
@@ -51,12 +59,23 @@ def send_discord_notification(webhook_url, summary):
 - **Quota Status:** {'EXHAUSTED' if summary['api_exhausted'] else 'OK'}
 {niche_summary}
 {error_summary}
-    """
+    """.strip()
     
+    # Discord has a hard 2000 character limit for messages.
+    if len(content) > 1950:
+        content = content[:1950] + "\n... [TRUNCATED DUE TO DISCORD LIMIT]"
+    
+    print("\nAttempting to push summary to Discord webhook...")
     try:
-        requests.post(webhook_url, json={"content": content})
+        response = requests.post(webhook_url.strip(), json={"content": content})
+        response.raise_for_status()
+        print(f"Discord notification successfully sent! (HTTP {response.status_code})")
     except Exception as e:
-        print(f"Error sending Discord notification: {e}")
+        print(f"FAILED to send Discord notification! Error: {e}")
+        try:
+            print(f"Discord Response Details: {response.text}")
+        except:
+            pass
 
 def generate_queries():
     """Procedurally generate an infinite matrix of unique gaming queries."""

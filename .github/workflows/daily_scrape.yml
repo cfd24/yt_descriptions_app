@@ -31,7 +31,7 @@ jobs:
           echo "$GOOGLE_CREDENTIALS_JSON" > google_credentials.json
 
       - name: Install Playwright Browsers
-        run: npx playwright install chromium
+        run: python -m playwright install chromium
 
       - name: Run YouTube Discovery Scraper
         env:
