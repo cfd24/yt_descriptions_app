@@ -53,6 +53,7 @@ def send_discord_notification(webhook_url, summary):
     content = f"""
 **{status_emoji} YouTube Scraper Run Complete**
 - **New Channels Found:** {summary['new_channels_found']}
+- **Efficiency:** {efficiency} new/search ({summary.get('searches_performed',0)} searches)
 - **Sources:** Scrape ({summary.get('scrape_count',0)}), Crawl ({summary.get('crawl_count',0)}), Search ({summary.get('search_count',0)})
 - **API Keys Used:** {summary['api_keys_used']} / {summary['total_keys']}
 - **Run Duration:** {duration}
@@ -440,7 +441,11 @@ def discover_channels(output_file, max_new=1000, queries=None, include_recent_da
     
     # Collect new channels
     for query in queries:
-        if total_channels >= max_total or api_exhausted:
+        # Safety Buffer: search.list costs 100 units. 
+        # Stopping at 97 searches (9,700 units) leaves 300 units for batch population (1 unit per 50 channels).
+        if total_channels >= max_total or api_exhausted or searches_performed >= 97:
+            if searches_performed >= 97 and not api_exhausted:
+                print("Approaching quota limit (97 searches). Reserving remaining units for channel characterization...")
             break
             
         # Rotate search order, date window, and type for each query
@@ -674,6 +679,7 @@ def discover_channels(output_file, max_new=1000, queries=None, include_recent_da
     print("       YOUTUBE SCRAPER RUN SUMMARY")
     print("="*40)
     print(f"New Channels Found:  {summary['new_channels_found']}")
+    print(f"Search API Calls:    {summary['searches_performed']} / 100 (Est.)")
     print(f"API Keys Used:       {summary['api_keys_used']} / {summary['total_keys']}")
     print(f"Quota Status:        {'EXHAUSTED' if summary['api_exhausted'] else 'OK'}")
     print(f"Date Window:         Rotating (7d, 30d, 90d, All-Time)")

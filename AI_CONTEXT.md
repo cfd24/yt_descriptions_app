@@ -40,7 +40,8 @@ This is an automated, scalable YouTube scraping engine that locates gaming-relat
    - **Anchoring:** Uses `table_range="A1"` when appending rows to prevent horizontal shifting bugs in Sheets API.
 
 2. **Google Cloud / Quota Compliance (CRITICAL)**
-   - **DO NOT INTRODUCE MULTI-KEY OR MULTI-PROJECT ROTATION.** The project was previously suspended for quota circumvention. Ensure it strictly abides by the 10,000 unit daily limit using exactly **one project** and **one API key**. 
+   - **Quota Safety Buffer**: To prevent 403 errors during the final metadata enrichment phase, the script implements a hard stop at **97 search calls** (approx. 9,700 units). This reserves ~300 units to ensure all discovered channels can successfully have their emails and descriptions fetched before the daily 10,000-unit quota is fully exhausted.
+   - **Single API Key Usage**: To comply with Google Cloud Terms of Service, the script strictly uses one API key. It exits gracefully upon hitting the quota limit to avoid circumvention flags.
    - The script exits cleanly when it receives a `quotaExceeded` or `403/429` error.
 
 3. **Procedural Query Generator**
