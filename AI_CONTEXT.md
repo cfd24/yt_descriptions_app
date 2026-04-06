@@ -66,8 +66,9 @@ This project relies on environmental secrets for security and auth.
 
 ## 📝 Changelog (AIs, append your changes here!)
 
-- **2026-04-05 (Current)**:
-  - Deep-rewrote `AI_CONTEXT.md` to be the "sufficient sufficient" master document to save AI token reading costs. Added explicit AI modification rules to ensure it remains turbo up-to-date.
-  - Investigated Discord message failure reported by user. Reminded user that local test runs will silently skip the webhook if the `DISCORD_WEBHOOK_URL` environment variable is not explicitly exported in their terminal session.
+- **2026-04-06**:
+  - Implemented a **Quota Safety Buffer** (hard stop at 97 search calls) to reserve 300 units for the final metadata enrichment phase. This prevents 403 errors during the final "Batch Populate" step.
+  - Enhanced Discord notification content: Added **Efficiency Stats** (New Channels/Search) and a **New Channels Preview** (list of 5 sample discovered names).
+  - Verified all bug fixes (including the critical `search_request` NameError) were successfully pushed to `main`.
 - **2026-04-05**: Fixed silent failure with Discord webhook notifications (Discord returns 400 Bad Request on >2000 chars). Added content length truncation and explicit `raise_for_status()`. 
 - **2026-04-04**: Fixed NameError crash in summary generator and consolidated from multi-project rotation to a single active GCP project to comply with Google Trust & Safety bounds. Scraping logic was made hyper-resilient to errors.
