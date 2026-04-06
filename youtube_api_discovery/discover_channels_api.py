@@ -50,6 +50,10 @@ def send_discord_notification(webhook_url, summary):
     if summary.get('searches_performed', 0) > 0:
         efficiency = round(summary['new_channels_found'] / summary['searches_performed'], 2)
 
+    sample_summary = ""
+    if summary.get('sample_channels'):
+        sample_summary = "\n**New Channels Preview:**\n" + "\n".join([f"- {name}" for name in summary['sample_channels']])
+
     content = f"""
 **{status_emoji} YouTube Scraper Run Complete**
 - **New Channels Found:** {summary['new_channels_found']}
@@ -58,6 +62,7 @@ def send_discord_notification(webhook_url, summary):
 - **API Keys Used:** {summary['api_keys_used']} / {summary['total_keys']}
 - **Run Duration:** {duration}
 - **Quota Status:** {'EXHAUSTED' if summary['api_exhausted'] else 'OK'}
+{sample_summary}
 {niche_summary}
 {error_summary}
     """.strip()
