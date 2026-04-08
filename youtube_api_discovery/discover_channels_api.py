@@ -446,11 +446,7 @@ def discover_channels(output_file, max_new=1000, queries=None, include_recent_da
     
     # Collect new channels
     for query in queries:
-        # Safety Buffer: search.list costs 100 units. 
-        # Stopping at 97 searches (9,700 units) leaves 300 units for batch population (1 unit per 50 channels).
-        if total_channels >= max_total or api_exhausted or searches_performed >= 97:
-            if searches_performed >= 97 and not api_exhausted:
-                print("Approaching quota limit (97 searches). Reserving remaining units for channel characterization...")
+        if total_channels >= max_total or api_exhausted:
             break
             
         # Rotate search order, date window, and type for each query
@@ -463,6 +459,13 @@ def discover_channels(output_file, max_new=1000, queries=None, include_recent_da
             page_token = None
             page_count = 0
             while total_channels < max_total and page_count < 2: # Limit to 2 pages per query to spread quota
+                # Safety Buffer: search.list costs 100 units. 
+                # Stopping at 95 searches (9,500 units) leaves 500 units for batch population (1 unit per 50 channels).
+                if searches_performed >= 95:
+                    print("Approaching quota limit (95 searches). Reserving remaining units for channel characterization...")
+                    api_exhausted = True # Trigger graceful exit
+                    break
+
                 if dry_run:
                     print(f"[DRY-RUN] Would search: query='{query}', type='{s_type}', order='{current_order}', publishedAfter='{current_date_window}'")
                     page_count = 2 # Stop after one "page" log
@@ -684,7 +687,7 @@ def discover_channels(output_file, max_new=1000, queries=None, include_recent_da
     print("       YOUTUBE SCRAPER RUN SUMMARY")
     print("="*40)
     print(f"New Channels Found:  {summary['new_channels_found']}")
-    print(f"Search API Calls:    {summary['searches_performed']} / 100 (Est.)")
+    print(f"Search API Calls:    {summary['searches_performed']} / 95 (Safety Limit)")
     print(f"API Keys Used:       {summary['api_keys_used']} / {summary['total_keys']}")
     print(f"Quota Status:        {'EXHAUSTED' if summary['api_exhausted'] else 'OK'}")
     print(f"Date Window:         Rotating (7d, 30d, 90d, All-Time)")

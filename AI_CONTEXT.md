@@ -40,7 +40,7 @@ This is an automated, scalable YouTube scraping engine that locates gaming-relat
    - **Anchoring:** Uses `table_range="A1"` when appending rows to prevent horizontal shifting bugs in Sheets API.
 
 2. **Google Cloud / Quota Compliance (CRITICAL)**
-   - **Quota Safety Buffer**: To prevent 403 errors during the final metadata enrichment phase, the script implements a hard stop at **97 search calls** (approx. 9,700 units). This reserves ~300 units to ensure all discovered channels can successfully have their emails and descriptions fetched before the daily 10,000-unit quota is fully exhausted.
+   - **Quota Safety Buffer**: To prevent 403 errors during the final metadata enrichment phase, the script implements a hard stop at **95 search calls** (approx. 9,500 units). This reserves ~500 units to ensure all discovered channels can successfully have their emails and descriptions fetched before the daily 10,000-unit quota is fully exhausted.
    - **Single API Key Usage**: To comply with Google Cloud Terms of Service, the script strictly uses one API key. It exits gracefully upon hitting the quota limit to avoid circumvention flags.
    - The script exits cleanly when it receives a `quotaExceeded` or `403/429` error.
 
@@ -66,6 +66,9 @@ This project relies on environmental secrets for security and auth.
 
 ## 📝 Changelog (AIs, append your changes here!)
 
+- **2026-04-08**:
+  - Fixed a bug where the search loop could overrun the quota safety buffer. The check is now inside the pagination loop.
+  - Reduced the safety threshold from 97 to 95 searches (leaving ~500 units) to ensure successful metadata enrichment for all discovered channels.
 - **2026-04-06**:
   - Implemented a **Quota Safety Buffer** (hard stop at 97 search calls) to reserve 300 units for the final metadata enrichment phase. This prevents 403 errors during the final "Batch Populate" step.
   - Enhanced Discord notification content: Added **Efficiency Stats** (New Channels/Search) and a **New Channels Preview** (list of 5 sample discovered names).
