@@ -7,7 +7,7 @@
 > 
 > **YOUR OBLIGATIONS:**
 > 1. **ALWAYS KEEP THIS DOCUMENT TURBO UP-TO-DATE.** If you make *any* structural changes, fix major bugs, add new files, change environment variables, or run workflows, you **MUST** update this file immediately.
-> 2. **ALWAYS ADD TO THE CHANGELOG** at the bottom of this file. Do not alter past changelog entries, just append to them.
+> 2. **ALWAYS UPDATE THE [ACTIVITY_LOG.md](file:///Users/crisostomo/Desktop/personal_projects/SSAA/yt_descriptions_app/ACTIVITY_LOG.md)** at the end of each session. Summarize what was fixed and what was added.
 
 ---
 
@@ -64,14 +64,5 @@ This project relies on environmental secrets for security and auth.
 
 ---
 
-## 📝 Changelog (AIs, append your changes here!)
-
-- **2026-04-08**:
-  - Fixed a bug where the search loop could overrun the quota safety buffer. The check is now inside the pagination loop.
-  - Reduced the safety threshold from 97 to 95 searches (leaving ~500 units) to ensure successful metadata enrichment for all discovered channels.
-- **2026-04-06**:
-  - Implemented a **Quota Safety Buffer** (hard stop at 97 search calls) to reserve 300 units for the final metadata enrichment phase. This prevents 403 errors during the final "Batch Populate" step.
-  - Enhanced Discord notification content: Added **Efficiency Stats** (New Channels/Search) and a **New Channels Preview** (list of 5 sample discovered names).
-  - Verified all bug fixes (including the critical `search_request` NameError) were successfully pushed to `main`.
-- **2026-04-05**: Fixed silent failure with Discord webhook notifications (Discord returns 400 Bad Request on >2000 chars). Added content length truncation and explicit `raise_for_status()`. 
-- **2026-04-04**: Fixed NameError crash in summary generator and consolidated from multi-project rotation to a single active GCP project to comply with Google Trust & Safety bounds. Scraping logic was made hyper-resilient to errors.
+## 📅 Maintenance & History
+For a full day-by-day technical history of the project, see [ACTIVITY_LOG.md](file:///Users/crisostomo/Desktop/personal_projects/SSAA/yt_descriptions_app/ACTIVITY_LOG.md).
