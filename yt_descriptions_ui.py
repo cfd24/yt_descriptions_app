@@ -6,6 +6,26 @@ import tempfile
 import pandas as pd
 import datetime
 import hmac
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
+
+@st.cache_data(ttl=3600)
+def load_sheet_data(sheet_name="YT_Scraper_DB"):
+    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+    creds = None
+    
+    if "gcp_service_account" in st.secrets:
+        creds = ServiceAccountCredentials.from_json_keyfile_dict(st.secrets["gcp_service_account"], scope)
+    elif os.path.exists("google_credentials.json"):
+        creds = ServiceAccountCredentials.from_json_keyfile_name("google_credentials.json", scope)
+    else:
+        raise ValueError("No Google Credentials found.")
+        
+    client = gspread.authorize(creds)
+    sheet = client.open(sheet_name).sheet1
+    data = sheet.get_all_values()
+    if not data: return pd.DataFrame()
+    return pd.DataFrame(data[1:], columns=data[0])
 
 # Install playwright automatically (mainly for Cloud deployment)
 os.system("playwright install chromium > /dev/null 2>&1")
@@ -51,7 +71,7 @@ with st.expander("⚙️ API Settings & Authentication"):
     st.markdown("Enter your YouTube Data v3 API key. Must be a single valid key to comply with Google Cloud TOS.")
     api_key_str = st.text_input("API Key", value=DEFAULT_API_KEY, type="password")
 
-tab1, tab2 = st.tabs(["🔍 Discover Channels", "📝 Extract Descriptions"])
+tab1, tab2, tab3 = st.tabs(["🔍 Discover Channels", "📝 Extract Descriptions", "📊 Database Explorer"])
 
 with tab1:
     st.header("🔍 Discover New YouTube Channels")
@@ -190,3 +210,89 @@ with tab2:
                     st.text_area("Error Output", result.stderr, height=300)
                     if result.stdout:
                         st.text_area("Standard Output", result.stdout, height=300)
+
+with tab3:
+    st.header("📊 Database Explorer")
+    st.markdown("Live view of your Google Spreadsheet with advanced filtering and relevance scoring.")
+    
+    sheet_name = st.text_input("Google Sheet Name", value="YT_Scraper_DB", key="db_sheet_name")
+    
+    if st.button("Load Database / Refresh"):
+        try:
+            with st.spinner("Fetching live data from Google Sheets..."):
+                df = load_sheet_data(sheet_name)
+            
+            if df.empty:
+                st.warning("Spreadsheet is empty.")
+            else:
+                st.success(f"Loaded {len(df)} channels successfully!")
+                st.session_state['db_df'] = df
+        except Exception as e:
+            st.error(f"Error loading database: {str(e)}")
+            
+    if 'db_df' in st.session_state:
+        df = st.session_state['db_df'].copy()
+        
+        # Convert subscribers to numeric
+        def clean_number(x):
+            if pd.isna(x) or x == 'N/A' or not str(x).strip(): return 0
+            x = str(x).strip().upper()
+            if 'M' in x: return float(x.replace('M', '')) * 1000000
+            elif 'K' in x: return float(x.replace('K', '')) * 1000
+            try: return float(x)
+            except: return 0
+            
+        df['subscribers_num'] = df['subscribers'].apply(clean_number)
+        
+        # Relevance Score (Overlap)
+        df['Relevance Score'] = df['queries'].apply(lambda x: len(str(x).split(';')) if pd.notna(x) and str(x).strip() else 0)
+        
+        # Interactive Filters
+        st.subheader("Filter & Sort")
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            if 'description_language' in df.columns:
+                languages = sorted([lang for lang in df['description_language'].unique() if pd.notna(lang) and lang.strip() != ''])
+                if 'en' in languages:
+                    languages.remove('en')
+                    languages.insert(0, 'en')
+                selected_langs = st.multiselect("Language Filter", options=languages)
+            else:
+                selected_langs = []
+        with col2:
+            min_subs = st.number_input("Minimum Subscribers", value=0, min_value=0, step=1000)
+        with col3:
+            query_search = st.text_input("Filter by Query/Niche", value="")
+        with col4:
+            st.write("") # Adjust vertical alignment with text inputs
+            st.write("")
+            require_emails = st.checkbox("Has Emails Only")
+            
+        # Apply Filters
+        filtered_df = df[df['subscribers_num'] >= min_subs]
+        if selected_langs and 'description_language' in filtered_df.columns:
+            filtered_df = filtered_df[filtered_df['description_language'].isin(selected_langs)]
+        if query_search:
+            filtered_df = filtered_df[filtered_df['queries'].str.contains(query_search, case=False, na=False)]
+        if require_emails and 'emails' in filtered_df.columns:
+            filtered_df = filtered_df[filtered_df['emails'].notna() & (filtered_df['emails'].str.strip() != '')]
+            
+        st.markdown(f"**Showing {len(filtered_df):,} / {len(df):,} channels**")
+        
+        # Sort by relevance and then subs
+        filtered_df = filtered_df.sort_values(by=['Relevance Score', 'subscribers_num'], ascending=[False, False])
+        
+        # Display Table
+        display_cols = ['channel_name', 'channel_url', 'subscribers', 'Relevance Score', 'emails', 'description_language', 'queries']
+        display_cols = [c for c in display_cols if c in filtered_df.columns]
+        
+        st.dataframe(
+            filtered_df[display_cols],
+            column_config={
+                "channel_url": st.column_config.LinkColumn("Channel URL"),
+                "Relevance Score": st.column_config.NumberColumn("Relevance", format="%d overlaps"),
+                "emails": st.column_config.TextColumn("Emails")
+            },
+            hide_index=True,
+            use_container_width=True
+        )
