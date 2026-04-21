@@ -38,8 +38,8 @@ jobs:
           YOUTUBE_API_KEYS: ${{ secrets.YOUTUBE_API_KEYS }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: |
-          # Runs until daily API quota (10,000 units) is exhausted. Must use a single key to comply with TOS.
-          python youtube_api_discovery/discover_channels_api.py --api-key "$YOUTUBE_API_KEYS" --google-sheet "YT_Scraper_DB" --max-channels 10000
+          # Runs until daily API quota limit is exhausted. Must use a single key to comply with TOS.
+          python youtube_api_discovery/discover_channels_api.py --api-key "$YOUTUBE_API_KEYS" --google-sheet "YT_Scraper_DB" --max-channels 50000
           
       - name: Clean up credentials
         if: always()

@@ -460,9 +460,9 @@ def discover_channels(output_file, max_new=1000, queries=None, include_recent_da
             page_count = 0
             while total_channels < max_total and page_count < 2: # Limit to 2 pages per query to spread quota
                 # Safety Buffer: search.list costs 100 units. 
-                # Stopping at 95 searches (9,500 units) leaves 500 units for batch population (1 unit per 50 channels).
-                if searches_performed >= 95:
-                    print("Approaching quota limit (95 searches). Reserving remaining units for channel characterization...")
+                # Stopping at 980 searches (98,000 units) leaves 2,000 units for batch population (1 unit per 50 channels).
+                if searches_performed >= 980:
+                    print("Approaching quota limit (980 searches). Reserving remaining units for channel characterization...")
                     api_exhausted = True # Trigger graceful exit
                     break
 
@@ -687,7 +687,7 @@ def discover_channels(output_file, max_new=1000, queries=None, include_recent_da
     print("       YOUTUBE SCRAPER RUN SUMMARY")
     print("="*40)
     print(f"New Channels Found:  {summary['new_channels_found']}")
-    print(f"Search API Calls:    {summary['searches_performed']} / 95 (Safety Limit)")
+    print(f"Search API Calls:    {summary['searches_performed']} / 980 (Safety Limit)")
     print(f"API Keys Used:       {summary['api_keys_used']} / {summary['total_keys']}")
     print(f"Quota Status:        {'EXHAUSTED' if summary['api_exhausted'] else 'OK'}")
     print(f"Date Window:         Rotating (7d, 30d, 90d, All-Time)")
